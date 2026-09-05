@@ -1,0 +1,7 @@
+sync_recordings:
+  fields:
+    config_entry_id:
+      required: false
+      selector:
+        config_entry:
+          integration: reolink_manager

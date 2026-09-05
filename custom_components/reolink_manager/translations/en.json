@@ -1,0 +1,66 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Attach to a Reolink camera",
+        "description": "Pick which already-configured Reolink integration entry Reolink Manager should manage. No new connection is opened; the connection already held by the Reolink integration is reused.",
+        "data": {
+          "reolink_entry_id": "Reolink integration entry"
+        }
+      }
+    },
+    "abort": {
+      "no_reolink_entries": "No loaded Reolink integration entry was found (or all of them already have a Reolink Manager instance). Set up the official Reolink integration first.",
+      "already_configured": "This Reolink integration entry is already managed by Reolink Manager."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Recording archive",
+        "description": "Periodically download this camera's recordings to a local disk, so they can be played back quickly instead of streaming slowly from the camera. Recordings on the camera itself are never deleted. Leave the archive folder empty to turn this off entirely.",
+        "data": {
+          "archive_path": "Archive folder",
+          "archive_retention_days": "Keep downloaded recordings for (days)",
+          "archive_interval_hours": "Check for new recordings every (hours)",
+          "archive_stream": "Stream to download",
+          "trigger_entities": "Sync immediately when these clear",
+          "trigger_settle_seconds": "Wait this long after they clear (seconds)"
+        },
+        "data_description": {
+          "archive_path": "Absolute path, for example /media/reolink or an external disk's mount point. Its parent folder must already exist. Leave empty to disable the archive.",
+          "archive_retention_days": "Archived copies older than this are deleted from the archive folder. Nothing is deleted from the camera.",
+          "archive_stream": "The main stream is full resolution and much larger; the sub stream is far smaller but low resolution.",
+          "trigger_entities": "Typically this camera's own person/animal/vehicle binary sensors from the Reolink integration. When one goes from detected back to clear, a sync starts after the wait below - on top of the periodic schedule, not instead of it. Leave empty to rely on the periodic schedule only.",
+          "trigger_settle_seconds": "The camera needs a moment to finish writing a recording after detection ends. Too short and the sync may run before the file exists yet; it will simply be picked up on the next periodic or triggered sync instead."
+        }
+      }
+    },
+    "error": {
+      "path_not_absolute": "The archive folder must be an absolute path.",
+      "path_not_directory": "The archive path exists but is not a folder.",
+      "path_not_writable": "Home Assistant cannot write to this location.",
+      "path_parent_missing": "The parent folder does not exist. If this is an external disk, check that it is mounted."
+    }
+  },
+  "selector": {
+    "archive_stream": {
+      "options": {
+        "main": "Main (high resolution)",
+        "sub": "Sub (low resolution)"
+      }
+    }
+  },
+  "services": {
+    "sync_recordings": {
+      "name": "Sync recordings",
+      "description": "Downloads any new recordings to the local archive now, and prunes archived copies that are past the retention window, instead of waiting for the next scheduled pass.",
+      "fields": {
+        "config_entry_id": {
+          "name": "Camera",
+          "description": "Which Reolink Manager entry to sync. Only needed when more than one has the archive enabled."
+        }
+      }
+    }
+  }
+}

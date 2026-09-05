@@ -1,0 +1,23 @@
+# Loads default set of integrations. Do not remove.
+default_config:
+
+logger:
+  default: warning
+  logs:
+    custom_components.reolink_manager: debug
+    homeassistant.components.reolink: debug
+
+# If you need to debug uncomment the line below (doc: https://www.home-assistant.io/integrations/debugpy/)
+debugpy:
+  start: true
+  wait: false
+  port: 5678
+
+# Reolink Manager has no YAML config of its own: it is config-flow only.
+# 1. Settings > Devices & Services > Add Integration > Reolink, point it at a
+#    real camera (or an NVR channel) and let it finish setup.
+# 2. Settings > Devices & Services > Add Integration > Reolink Manager, pick
+#    the Reolink entry from step 1.
+# There is no way to fully exercise this against a fake/simulated camera:
+# reolink_manager only does anything once the official integration's Host is
+# actually connected, so manual testing needs a real device on the network.

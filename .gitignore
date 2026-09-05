@@ -1,0 +1,18 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+htmlcov/
+
+# init file required for unittest
+custom_components/__init__.py
+
+# Home Assistant dev instance
+config/**
+!config/custom_components
+config/custom_components/*
+!config/custom_components/.gitkeep
+
+# venv
+.venv/

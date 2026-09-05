@@ -1,0 +1,66 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Rattacher à une caméra Reolink",
+        "description": "Choisissez l'entrée de l'intégration Reolink déjà configurée que Reolink Manager doit gérer. Aucune nouvelle connexion n'est ouverte : la connexion déjà détenue par l'intégration Reolink est réutilisée.",
+        "data": {
+          "reolink_entry_id": "Entrée de l'intégration Reolink"
+        }
+      }
+    },
+    "abort": {
+      "no_reolink_entries": "Aucune entrée de l'intégration Reolink chargée n'a été trouvée (ou elles sont déjà toutes gérées par Reolink Manager). Configurez d'abord l'intégration Reolink officielle.",
+      "already_configured": "Cette entrée de l'intégration Reolink est déjà gérée par Reolink Manager."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Archive des enregistrements",
+        "description": "Télécharge périodiquement les enregistrements de cette caméra sur un disque local, pour les relire rapidement au lieu de les diffuser lentement depuis la caméra. Les enregistrements présents sur la caméra ne sont jamais supprimés. Laissez le dossier d'archive vide pour désactiver complètement cette fonction.",
+        "data": {
+          "archive_path": "Dossier d'archive",
+          "archive_retention_days": "Conserver les enregistrements téléchargés pendant (jours)",
+          "archive_interval_hours": "Rechercher de nouveaux enregistrements toutes les (heures)",
+          "archive_stream": "Flux à télécharger",
+          "trigger_entities": "Synchroniser immédiatement quand ces entités repassent à l'état clair",
+          "trigger_settle_seconds": "Attendre ce délai après leur retour à l'état clair (secondes)"
+        },
+        "data_description": {
+          "archive_path": "Chemin absolu, par exemple /media/reolink ou le point de montage d'un disque externe. Son dossier parent doit déjà exister. Laisser vide pour désactiver l'archive.",
+          "archive_retention_days": "Les copies archivées plus anciennes sont supprimées du dossier d'archive. Rien n'est supprimé sur la caméra.",
+          "archive_stream": "Le flux principal est en pleine résolution et bien plus volumineux ; le sous-flux est beaucoup plus léger mais en basse résolution.",
+          "trigger_entities": "Typiquement les propres capteurs binaires personne/animal/véhicule de cette caméra fournis par l'intégration Reolink. Quand l'un d'eux repasse de détecté à clair, une synchronisation démarre après le délai ci-dessous - en plus de la planification périodique, pas à sa place. Laisser vide pour ne compter que sur la planification périodique.",
+          "trigger_settle_seconds": "La caméra a besoin d'un instant pour finir d'écrire un enregistrement une fois la détection terminée. Un délai trop court peut lancer la synchronisation avant que le fichier n'existe encore ; il sera simplement repris lors de la prochaine synchronisation périodique ou déclenchée."
+        }
+      }
+    },
+    "error": {
+      "path_not_absolute": "Le dossier d'archive doit être un chemin absolu.",
+      "path_not_directory": "Le chemin d'archive existe mais n'est pas un dossier.",
+      "path_not_writable": "Home Assistant ne peut pas écrire à cet emplacement.",
+      "path_parent_missing": "Le dossier parent n'existe pas. S'il s'agit d'un disque externe, vérifiez qu'il est bien monté."
+    }
+  },
+  "selector": {
+    "archive_stream": {
+      "options": {
+        "main": "Principal (haute résolution)",
+        "sub": "Secondaire (basse résolution)"
+      }
+    }
+  },
+  "services": {
+    "sync_recordings": {
+      "name": "Synchroniser les enregistrements",
+      "description": "Télécharge immédiatement les nouveaux enregistrements dans l'archive locale et supprime les copies archivées hors de la fenêtre de rétention, sans attendre le prochain passage planifié.",
+      "fields": {
+        "config_entry_id": {
+          "name": "Caméra",
+          "description": "Quelle entrée Reolink Manager synchroniser. Nécessaire uniquement si plusieurs ont l'archive activée."
+        }
+      }
+    }
+  }
+}

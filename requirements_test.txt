@@ -1,0 +1,4 @@
+# Development and Testing Requirements
+pytest
+pytest-asyncio
+pytest-homeassistant-custom-component
