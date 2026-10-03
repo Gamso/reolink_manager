@@ -23,7 +23,8 @@ are scheduled to record. That per-trigger schedule is configured on the
 camera/NVR itself (or in the Reolink app), not from Home Assistant.
 
 Reolink's HTTP API *does* support reading and writing that schedule
-(`GetRecV20`/`SetRecV20`, see `docs/reolink-camera-http-api-user-guide.pdf`),
+(`GetRecV20`/`SetRecV20`, documented in Reolink's *Camera HTTP API User
+Guide*, available from Reolink support),
 and the `reolink_aio` library HA already depends on caches the raw schedule
 table - it just never parses or exposes it. Reolink Manager reuses that cache
 and that connection directly, so you get toggles like *"Animal recording"* or
@@ -73,9 +74,9 @@ Playing recordings straight from the camera is slow: they stream over the
 camera's own HTTP interface, which isn't built for seeking through days of
 footage. The archive keeps a local mirror instead.
 
-Enable it in **Settings > Devices & Services > Reolink Manager > Configure**:
-
-There is no separate on/off switch: the archive runs when a folder is set below, and is off when it's left empty.
+Enable it in **Settings > Devices & Services > Reolink Manager > Configure** by
+setting an archive folder. There is no separate on/off switch: the archive runs
+when a folder is set, and is off when it's left empty. The options are:
 
 | Option | Meaning |
 | -- | -- |
@@ -250,5 +251,12 @@ every channel it exposes.
 ## Development
 
 See [`.devcontainer/README.md`](.devcontainer/README.md) for the VS Code
-devcontainer setup. There is no simulated-camera fixture: manual end-to-end
-testing needs a real Reolink camera or NVR reachable from the container.
+devcontainer setup. The automated tests (`pytest`, see `requirements_test.txt`)
+run the integration inside a test Home Assistant against a faked official
+Reolink entry; CI also runs flake8, hassfest and the HACS validation. There is
+no simulated camera, so manual end-to-end testing needs a real Reolink camera
+or NVR reachable from the container.
+
+## License
+
+[MIT](LICENSE)
