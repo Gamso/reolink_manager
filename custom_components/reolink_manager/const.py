@@ -34,10 +34,14 @@ DEFAULT_ARCHIVE_INTERVAL_HOURS = 6
 DEFAULT_ARCHIVE_STREAM = "main"
 ARCHIVE_STREAMS = ["main", "sub"]
 
-# Written at the root of the archive directory the first time it is used.
-# Pruning refuses to run when it is missing, so pointing the archive at a
+# Written at the root of the archive directory the first time it is used -
+# but only when that directory was just created or is empty; a non-empty
+# directory without it is refused (options flow and every pass). Pruning
+# refuses to run when it is missing, so pointing the archive at a
 # pre-existing directory (an external disk's root, say) can never delete
-# anything this integration did not put there.
+# anything this integration did not put there. The archive root itself is
+# the only directory ever created: its parent must exist, so an unmounted
+# disk is never recreated on the mount point.
 ARCHIVE_MARKER_FILENAME = ".reolink_manager_archive"
 
 # The first sync is deferred this long after startup so a catch-up download of

@@ -9,7 +9,7 @@ from custom_components.reolink_manager.config_flow import (
     ReolinkManagerConfigFlow,
     validate_archive_path,
 )
-from custom_components.reolink_manager.const import CONF_REOLINK_ENTRY_ID
+from custom_components.reolink_manager.const import ARCHIVE_MARKER_FILENAME, CONF_REOLINK_ENTRY_ID
 
 
 def _reolink_entry(entry_id: str, title: str, state=ConfigEntryState.LOADED) -> MagicMock:
@@ -121,3 +121,15 @@ def test_archive_path_rejects_missing_parent(tmp_path: Path) -> None:
         validate_archive_path(str(tmp_path / "unmounted" / "reolink"))
         == "path_parent_missing"
     )
+
+
+def test_archive_path_rejects_a_non_empty_foreign_folder(tmp_path: Path) -> None:
+    """Pruning must never reach files something else put in the folder."""
+    (tmp_path / "front").mkdir()
+    assert validate_archive_path(str(tmp_path)) == "path_not_empty"
+
+
+def test_archive_path_accepts_an_existing_archive(tmp_path: Path) -> None:
+    (tmp_path / ARCHIVE_MARKER_FILENAME).write_text("", encoding="utf-8")
+    (tmp_path / "front").mkdir()
+    assert validate_archive_path(str(tmp_path)) is None

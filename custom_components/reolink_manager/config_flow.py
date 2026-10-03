@@ -26,6 +26,7 @@ from homeassistant.core import callback
 from homeassistant.helpers import selector
 
 from .const import (
+    ARCHIVE_MARKER_FILENAME,
     ARCHIVE_STREAMS,
     CONF_ARCHIVE_INTERVAL_HOURS,
     CONF_ARCHIVE_PATH,
@@ -66,6 +67,12 @@ def validate_archive_path(raw_path: str) -> str | None:
             return "path_not_directory"
         if not os.access(path, os.W_OK):
             return "path_not_writable"
+        # Same rule the archiver enforces before writing its marker: a
+        # folder that already holds files is only acceptable if it is
+        # already a Reolink Manager archive, so pruning can never reach
+        # files something else put there.
+        if not (path / ARCHIVE_MARKER_FILENAME).exists() and any(path.iterdir()):
+            return "path_not_empty"
         return None
 
     # The archive root itself is created on first use, but its parent has to

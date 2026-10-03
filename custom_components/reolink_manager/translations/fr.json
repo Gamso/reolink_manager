@@ -28,7 +28,7 @@
           "trigger_settle_seconds": "Attendre ce délai après leur retour à l'état clair (secondes)"
         },
         "data_description": {
-          "archive_path": "Chemin absolu, par exemple /media/reolink ou le point de montage d'un disque externe. Son dossier parent doit déjà exister. Laisser vide pour désactiver l'archive.",
+          "archive_path": "Chemin absolu, par exemple /media/reolink ou le point de montage d'un disque externe. Son dossier parent doit déjà exister, et le dossier lui-même doit être nouveau, vide, ou une archive Reolink Manager existante. Laisser vide pour désactiver l'archive.",
           "archive_retention_days": "Les copies archivées plus anciennes sont supprimées du dossier d'archive. Rien n'est supprimé sur la caméra.",
           "archive_stream": "Le flux principal est en pleine résolution et bien plus volumineux ; le sous-flux est beaucoup plus léger mais en basse résolution.",
           "trigger_entities": "Typiquement les propres capteurs binaires personne/animal/véhicule de cette caméra fournis par l'intégration Reolink. Quand l'un d'eux repasse de détecté à clair, une synchronisation démarre après le délai ci-dessous - en plus de la planification périodique, pas à sa place. Laisser vide pour ne compter que sur la planification périodique.",
@@ -40,7 +40,8 @@
       "path_not_absolute": "Le dossier d'archive doit être un chemin absolu.",
       "path_not_directory": "Le chemin d'archive existe mais n'est pas un dossier.",
       "path_not_writable": "Home Assistant ne peut pas écrire à cet emplacement.",
-      "path_parent_missing": "Le dossier parent n'existe pas. S'il s'agit d'un disque externe, vérifiez qu'il est bien monté."
+      "path_parent_missing": "Le dossier parent n'existe pas. S'il s'agit d'un disque externe, vérifiez qu'il est bien monté.",
+      "path_not_empty": "Le dossier d'archive contient déjà des fichiers et n'est pas une archive Reolink Manager. Choisissez un dossier vide ou nouveau : les anciens enregistrements y sont purgés, il ne doit donc rien contenir d'autre."
     }
   },
   "selector": {

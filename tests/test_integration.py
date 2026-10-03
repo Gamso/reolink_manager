@@ -115,6 +115,25 @@ async def test_service_starts_an_archive_pass(
     assert (tmp_path / "archive" / ".reolink_manager_archive").exists()
 
 
+async def test_service_pass_on_a_foreign_tree_deletes_nothing(
+    hass: HomeAssistant, manager_entry: MockConfigEntry, api: MagicMock, tmp_path: Path
+) -> None:
+    """End to end: options point at a folder another exporter already fills
+    (set directly, bypassing the options-flow check); the pass is skipped."""
+    old = tmp_path / "front_door" / "2020-01-01"
+    old.mkdir(parents=True)
+    (old / "clip.mp4").write_bytes(b"x")
+    hass.config_entries.async_update_entry(manager_entry, options=_options(str(tmp_path), **{CONF_ARCHIVE_RETENTION_DAYS: 1}))
+    await _setup(hass, manager_entry)
+
+    await hass.services.async_call(DOMAIN, SERVICE_SYNC_RECORDINGS, {}, blocking=True)
+    await hass.async_block_till_done()
+
+    assert (old / "clip.mp4").exists()
+    assert not (tmp_path / ".reolink_manager_archive").exists()
+    api.request_vod_files.assert_not_awaited()
+
+
 # --- options flow -------------------------------------------------------------
 
 

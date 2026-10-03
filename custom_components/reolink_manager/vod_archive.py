@@ -54,12 +54,42 @@ MARKER_CONTENT = (
 )
 
 
+class ArchiveRootError(OSError):
+    """The archive root is unusable, and using it anyway could cause damage."""
+
+
 def _prepare_root(root: Path) -> None:
-    """Create the archive root and its marker file. Blocking; run in an executor."""
-    root.mkdir(parents=True, exist_ok=True)
+    """Create the archive root and its marker file. Blocking; run in an executor.
+
+    Two safety rules, both raising `ArchiveRootError` instead of going ahead:
+
+    * the root's parent must already exist, and only the root itself is ever
+      created (never its ancestors): when an external disk is unmounted, its
+      mount point is still there but the archive folder on it is not, and
+      recreating it would silently fill the system disk (an SD card on a Pi
+      or HA Green) with a tree that pruning would then refuse to touch;
+    * the marker that authorises pruning is only written into a folder this
+      call just created, or one that is empty. A pre-existing folder holding
+      someone else's `<name>/<YYYY-MM-DD>/*.mp4` files (another exporter, a
+      NAS share) would otherwise be marked as ours and pruned.
+    """
+    if not root.parent.is_dir():
+        raise ArchiveRootError(
+            f"its parent folder {root.parent} does not exist (is the disk mounted?)"
+        )
+    root.mkdir(exist_ok=True)
+    if not root.is_dir():
+        raise ArchiveRootError(f"{root} is not a folder")
+
     marker = root / ARCHIVE_MARKER_FILENAME
-    if not marker.exists():
-        marker.write_text(MARKER_CONTENT, encoding="utf-8")
+    if marker.exists():
+        return
+    if any(root.iterdir()):
+        raise ArchiveRootError(
+            f"{root} already holds files but no {ARCHIVE_MARKER_FILENAME} marker, so "
+            "it is not a Reolink Manager archive; pick an empty or new folder"
+        )
+    marker.write_text(MARKER_CONTENT, encoding="utf-8")
 
 
 def _prune_archive(root: Path, cutoff: date) -> int:
@@ -69,7 +99,9 @@ def _prune_archive(root: Path, cutoff: date) -> int:
     may well be an external disk holding other data:
 
     * refuses to do anything unless the marker file written by `_prepare_root`
-      is present, so it can only ever run against a tree this integration made;
+      is present - and that marker is only ever written into a folder that
+      was new or empty - so it can only run against a tree this integration
+      made;
     * only descends into `<camera>/<YYYY-MM-DD>/` directories, and only ones
       whose name really parses as a date;
     * only unlinks `.mp4` files and interrupted `.part` downloads, leaving any
@@ -228,14 +260,16 @@ class VodArchiver:
         try:
             await self._hass.async_add_executor_job(_prepare_root, self._root)
         except OSError as err:
-            # Most commonly a permissions or read-only mount problem on
-            # whatever the archive folder points at (an external disk, say) -
-            # worth a clear one-line error instead of a bare stack trace,
-            # since this fires on every scheduled/triggered pass until fixed.
+            # An unmounted disk, a foreign non-empty folder, or a permissions
+            # / read-only mount problem - worth a clear one-line error instead
+            # of a bare stack trace, since this fires on every
+            # scheduled/triggered pass until fixed. Nothing is created,
+            # downloaded or pruned.
             _LOGGER.error(
-                "Cannot use %s as the recording archive: %s. Check that Home "
-                "Assistant has write access to this path (and that the disk, "
-                "if external, is actually mounted read-write).",
+                "Skipping archive pass: cannot use %s as the recording archive: %s. "
+                "Check that the folder is new or empty (or already a Reolink Manager "
+                "archive), that its disk is mounted read-write, and that Home "
+                "Assistant can write to it.",
                 self._root,
                 err,
             )
@@ -252,8 +286,14 @@ class VodArchiver:
         )
 
         stats = _SyncStats()
-        for channel in self._api.stream_channels:
-            stats.add(await self._async_sync_channel(channel, window_start, now))
+        try:
+            for channel in self._api.stream_channels:
+                stats.add(await self._async_sync_channel(channel, window_start, now))
+        except ArchiveRootError as err:
+            # The archive vanished mid-pass (disk unmounted, marker deleted):
+            # stop instead of recreating it somewhere it does not belong.
+            _LOGGER.error("Aborting archive pass for %s: %s", self._root, err)
+            return
 
         cutoff = (now - timedelta(days=self._retention_days)).date()
         removed = await self._hass.async_add_executor_job(_prune_archive, self._root, cutoff)
@@ -380,7 +420,7 @@ class VodArchiver:
         the rest of the pass, and it will be retried on the next one.
         """
         part = target.with_name(target.name + PART_SUFFIX)
-        await self._hass.async_add_executor_job(_make_parent, target)
+        await self._hass.async_add_executor_job(_make_parent, self._root, target)
 
         try:
             download = await self._api.download_vod(
@@ -430,8 +470,15 @@ class VodArchiver:
         return written
 
 
-def _make_parent(target: Path) -> None:
-    """Blocking; run in an executor."""
+def _make_parent(root: Path, target: Path) -> None:
+    """Create *target*'s `<camera>/<date>` folders under *root*. Blocking; run in an executor.
+
+    Only below a root that still carries the archive marker: if the disk was
+    unmounted since the pass started, `parents=True` would otherwise rebuild
+    the whole tree on the mount point.
+    """
+    if not (root / ARCHIVE_MARKER_FILENAME).exists():
+        raise ArchiveRootError(f"{root} is no longer available (marker file missing)")
     target.parent.mkdir(parents=True, exist_ok=True)
 
 

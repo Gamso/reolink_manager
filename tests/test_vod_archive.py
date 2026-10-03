@@ -5,8 +5,11 @@ from enum import IntFlag, auto
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
+import pytest
+
 from custom_components.reolink_manager.const import ARCHIVE_MARKER_FILENAME
 from custom_components.reolink_manager.vod_archive import (
+    ArchiveRootError,
     VodArchiver,
     _is_still_recording,
     _prepare_root,
@@ -165,6 +168,36 @@ def test_prepare_root_is_idempotent_and_preserves_marker(tmp_path: Path) -> None
     assert marker.read_text(encoding="utf-8") == "custom"
 
 
+def test_prepare_root_marks_an_empty_existing_folder(tmp_path: Path) -> None:
+    root = tmp_path / "archive"
+    root.mkdir()
+
+    _prepare_root(root)
+
+    assert (root / ARCHIVE_MARKER_FILENAME).exists()
+
+
+def test_prepare_root_refuses_a_non_empty_foreign_folder(tmp_path: Path) -> None:
+    """A folder already holding another exporter's files must never be marked."""
+    foreign = _seed_archive(tmp_path, "front", "2026-08-01", ["a.mp4"])
+
+    with pytest.raises(ArchiveRootError):
+        _prepare_root(tmp_path)
+
+    assert not (tmp_path / ARCHIVE_MARKER_FILENAME).exists()
+    assert (foreign / "a.mp4").exists()
+
+
+def test_prepare_root_never_recreates_a_missing_mount_point(tmp_path: Path) -> None:
+    """An unmounted disk: the parent is gone, nothing may be created."""
+    root = tmp_path / "usb" / "reolink"
+
+    with pytest.raises(ArchiveRootError):
+        _prepare_root(root)
+
+    assert not (tmp_path / "usb").exists()
+
+
 # --- sync -------------------------------------------------------------------
 
 
@@ -214,6 +247,7 @@ async def test_list_vod_files_queries_one_day_at_a_time(tmp_path: Path) -> None:
     """The camera's Search command silently caps results per call; querying
     one calendar day at a time (like Reolink's own recording browser does)
     is what keeps each call's result count under that cap."""
+    _prepare_root(tmp_path)
     now = datetime(2026, 9, 3, 12, 0, tzinfo=timezone.utc)
     start = datetime(2026, 9, 1, 6, 0, tzinfo=timezone.utc)
     vod_on_day_2 = _vod_file(datetime(2026, 9, 2, 8, 0, tzinfo=timezone.utc), datetime(2026, 9, 2, 8, 1, tzinfo=timezone.utc))
@@ -228,6 +262,7 @@ async def test_list_vod_files_queries_one_day_at_a_time(tmp_path: Path) -> None:
 
 async def test_list_vod_files_survives_one_days_failure(tmp_path: Path) -> None:
     """A failure listing one day must not stop the other days from being checked."""
+    _prepare_root(tmp_path)
     now = datetime(2026, 9, 3, 12, 0, tzinfo=timezone.utc)
     start = datetime(2026, 9, 1, 6, 0, tzinfo=timezone.utc)
     vod_on_day_3 = _vod_file(datetime(2026, 9, 3, 8, 0, tzinfo=timezone.utc), datetime(2026, 9, 3, 8, 1, tzinfo=timezone.utc))
@@ -260,6 +295,7 @@ async def test_recording_spanning_midnight_is_downloaded_once(tmp_path: Path) ->
     """The camera's Search returns any recording overlapping the queried window,
     so one spanning midnight comes back from both days - it must not be
     downloaded twice."""
+    _prepare_root(tmp_path)
     now = datetime(2026, 9, 3, 12, 0, tzinfo=timezone.utc)
     start = datetime(2026, 9, 1, 0, 0, tzinfo=timezone.utc)
     across_midnight = _vod_file(
@@ -279,6 +315,7 @@ async def test_recording_spanning_midnight_is_downloaded_once(tmp_path: Path) ->
 
 
 async def test_sync_channel_counts_already_archived(tmp_path: Path) -> None:
+    _prepare_root(tmp_path)
     now = datetime(2026, 9, 1, 12, 0, tzinfo=timezone.utc)
     vod = _vod_file(now - timedelta(hours=2), now - timedelta(hours=1, minutes=59))
     api = _api([vod])
@@ -294,6 +331,7 @@ async def test_sync_channel_counts_already_archived(tmp_path: Path) -> None:
 
 
 async def test_failed_download_is_counted_not_raised(tmp_path: Path) -> None:
+    _prepare_root(tmp_path)
     now = datetime(2026, 9, 1, 12, 0, tzinfo=timezone.utc)
     vod = _vod_file(now - timedelta(hours=2), now - timedelta(hours=1, minutes=59))
     api = _api([vod])
@@ -307,6 +345,7 @@ async def test_failed_download_is_counted_not_raised(tmp_path: Path) -> None:
 
 
 async def test_sync_downloads_new_recording_atomically(tmp_path: Path) -> None:
+    _prepare_root(tmp_path)
     now = datetime(2026, 9, 1, 12, 0, tzinfo=timezone.utc)
     vod = _vod_file(now - timedelta(hours=2), now - timedelta(hours=1, minutes=59))
     api = _api([vod], payload=b"video-bytes")
@@ -321,6 +360,7 @@ async def test_sync_downloads_new_recording_atomically(tmp_path: Path) -> None:
 
 
 async def test_sync_skips_already_archived_recording(tmp_path: Path) -> None:
+    _prepare_root(tmp_path)
     now = datetime(2026, 9, 1, 12, 0, tzinfo=timezone.utc)
     vod = _vod_file(now - timedelta(hours=2), now - timedelta(hours=1, minutes=59))
     api = _api([vod])
@@ -336,6 +376,7 @@ async def test_sync_skips_already_archived_recording(tmp_path: Path) -> None:
 
 
 async def test_sync_skips_recording_still_being_written(tmp_path: Path) -> None:
+    _prepare_root(tmp_path)
     now = datetime(2026, 9, 1, 12, 0, tzinfo=timezone.utc)
     vod = _vod_file(now - timedelta(minutes=3), now - timedelta(seconds=10))
     api = _api([vod])
@@ -347,6 +388,7 @@ async def test_sync_skips_recording_still_being_written(tmp_path: Path) -> None:
 
 
 async def test_truncated_download_is_discarded(tmp_path: Path) -> None:
+    _prepare_root(tmp_path)
     now = datetime(2026, 9, 1, 12, 0, tzinfo=timezone.utc)
     vod = _vod_file(now - timedelta(hours=2), now - timedelta(hours=1, minutes=59))
     api = _api([vod], payload=b"short")
@@ -361,6 +403,7 @@ async def test_truncated_download_is_discarded(tmp_path: Path) -> None:
 
 
 async def test_listing_failure_does_not_abort_the_pass(tmp_path: Path) -> None:
+    _prepare_root(tmp_path)
     now = datetime(2026, 9, 1, 12, 0, tzinfo=timezone.utc)
     api = _api([])
     api.request_vod_files = AsyncMock(side_effect=OSError("camera unreachable"))
@@ -372,6 +415,7 @@ async def test_listing_failure_does_not_abort_the_pass(tmp_path: Path) -> None:
 
 
 async def test_concurrent_sync_is_skipped(tmp_path: Path) -> None:
+    _prepare_root(tmp_path)
     api = _api([])
     archiver = VodArchiver(_hass(), api, root=tmp_path, retention_days=7, stream="main")
     archiver._running = True
@@ -384,6 +428,7 @@ async def test_concurrent_sync_is_skipped(tmp_path: Path) -> None:
 async def test_unwritable_archive_root_logs_and_does_not_raise(tmp_path: Path) -> None:
     """A permission error on the archive root (e.g. a read-only mount) must not
     crash the background sync task - it should be logged and skipped instead."""
+    _prepare_root(tmp_path)
     api = _api([])
     archiver = VodArchiver(_hass(), api, root=tmp_path, retention_days=7, stream="main")
 
@@ -400,3 +445,61 @@ async def test_unwritable_archive_root_logs_and_does_not_raise(tmp_path: Path) -
     await archiver.async_sync()  # must not raise
 
     api.request_vod_files.assert_not_called()
+
+
+# --- archive-root safety, end to end ---------------------------------------
+
+
+async def test_sync_on_a_foreign_tree_deletes_nothing(tmp_path: Path, caplog) -> None:
+    """Pointing the archive at a folder another exporter already fills: the
+    pass must be skipped with an ERROR, no marker written, nothing pruned."""
+    foreign = _seed_archive(tmp_path, "front_door", "2020-01-01", ["old.mp4", "old.mp4.part"])
+    api = _api([])
+    archiver = VodArchiver(_hass(), api, root=tmp_path, retention_days=1, stream="main")
+
+    await archiver.async_sync()
+    await archiver.async_sync()  # and still nothing on the next pass
+
+    assert (foreign / "old.mp4").exists()
+    assert (foreign / "old.mp4.part").exists()
+    assert not (tmp_path / ARCHIVE_MARKER_FILENAME).exists()
+    api.request_vod_files.assert_not_called()
+    assert any(r.levelname == "ERROR" and "Skipping archive pass" in r.message for r in caplog.records)
+
+
+async def test_sync_with_unmounted_disk_creates_nothing(tmp_path: Path, caplog) -> None:
+    mount_point = tmp_path / "mnt"
+    mount_point.mkdir()
+    root = mount_point / "usb" / "reolink"  # /mnt/usb is gone: disk unplugged
+    api = _api([])
+    archiver = VodArchiver(_hass(), api, root=root, retention_days=7, stream="main")
+
+    await archiver.async_sync()
+
+    assert list(mount_point.iterdir()) == []
+    api.request_vod_files.assert_not_called()
+    assert any(r.levelname == "ERROR" for r in caplog.records)
+
+
+async def test_disk_vanishing_mid_pass_aborts_without_recreating_it(tmp_path: Path, caplog) -> None:
+    root = tmp_path / "archive"
+    now = datetime.now(timezone.utc)
+    vod = _vod_file(now - timedelta(hours=2), now - timedelta(hours=1, minutes=59))
+    api = _api([vod])
+    real_request = api.request_vod_files.side_effect
+
+    async def _unmount_then_list(*args, **kwargs):
+        # The disk goes away after the pass started.
+        if root.exists():
+            (root / ARCHIVE_MARKER_FILENAME).unlink()
+            root.rmdir()
+        return await real_request(*args, **kwargs)
+
+    api.request_vod_files = AsyncMock(side_effect=_unmount_then_list)
+    archiver = VodArchiver(_hass(), api, root=root, retention_days=7, stream="main")
+
+    await archiver.async_sync()
+
+    assert not root.exists()
+    api.download_vod.assert_not_called()
+    assert any("Aborting archive pass" in r.message for r in caplog.records)

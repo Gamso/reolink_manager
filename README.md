@@ -66,7 +66,7 @@ There is no separate on/off switch: the archive runs when a folder is set below,
 
 | Option | Meaning |
 | -- | -- |
-| Archive folder | Absolute path, e.g. `/media/reolink` or an external disk's mount point. Leave empty to disable the archive. Its **parent** must already exist, so an unmounted disk fails loudly instead of silently filling the mount point. |
+| Archive folder | Absolute path, e.g. `/media/reolink` or a folder on an external disk such as `/media/usb/reolink`. Leave empty to disable the archive. Its **parent** must already exist, and the folder itself must be new, empty, or an existing Reolink Manager archive (see [What pruning will and won't touch](#what-pruning-will-and-wont-touch)). |
 | Keep downloaded recordings for | Retention in days (default 7). |
 | Check for new recordings every | Interval in hours (default 6). |
 | Stream to download | `main` (full resolution, large) or `sub` (low resolution, much smaller). |
@@ -150,10 +150,26 @@ a truncated file that looks finished.
 
 Retention deletes **archived copies only**. Nothing is ever deleted from the
 camera. Because the archive folder is a path you supply - quite possibly an
-external disk holding other data - pruning is deliberately narrow. It:
+external disk holding other data - the archive is deliberately careful about
+where it writes and what it deletes.
 
-* refuses to run at all unless the `.reolink_manager_archive` marker file is
-  present at the root, so it can only act on a tree this integration created;
+The `.reolink_manager_archive` marker file is only ever written into a folder
+that the archive has just created or that is **empty**. A folder that already
+holds files but no marker is refused - by the options form, and again by every
+pass, which then logs an ERROR and does nothing (no download, no pruning). So
+point the archive at a dedicated sub-folder (`/media/usb/reolink`), not at the
+root of a disk: a freshly formatted ext4 disk already holds `lost+found`.
+
+Only the archive folder itself is ever created, never its parents. If the disk
+it lives on is unmounted, its mount point is still there but the folder is
+not: every pass then logs an ERROR and stops, instead of rebuilding the tree
+(and downloading gigabytes) on the system disk underneath the mount point. A
+disk that disappears in the middle of a pass aborts that pass the same way.
+
+Pruning itself:
+
+* refuses to run at all unless the marker file is present at the root, so it
+  can only act on a tree this integration created;
 * only descends into `<camera>/<YYYY-MM-DD>/` directories whose name really
   parses as a date;
 * only deletes `.mp4` files and interrupted `.part` downloads, leaving every
