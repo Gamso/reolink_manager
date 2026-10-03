@@ -114,7 +114,7 @@ async def test_service_starts_an_archive_pass(
     await _setup(hass, manager_entry)
 
     await hass.services.async_call(DOMAIN, SERVICE_SYNC_RECORDINGS, {}, blocking=True)
-    await hass.async_block_till_done()
+    await hass.async_block_till_done(wait_background_tasks=True)
 
     assert api.request_vod_files.await_count >= 1
     assert (tmp_path / "archive" / ".reolink_manager_archive").exists()
@@ -132,7 +132,7 @@ async def test_service_pass_on_a_foreign_tree_deletes_nothing(
     await _setup(hass, manager_entry)
 
     await hass.services.async_call(DOMAIN, SERVICE_SYNC_RECORDINGS, {}, blocking=True)
-    await hass.async_block_till_done()
+    await hass.async_block_till_done(wait_background_tasks=True)
 
     assert (old / "clip.mp4").exists()
     assert not (tmp_path / ".reolink_manager_archive").exists()
@@ -406,13 +406,13 @@ async def test_full_archive_pass_downloads_and_prunes(
     await _setup(hass, manager_entry)
     # A first pass creates the archive; then plant an expired copy in it.
     await hass.services.async_call(DOMAIN, SERVICE_SYNC_RECORDINGS, {}, blocking=True)
-    await hass.async_block_till_done()
+    await hass.async_block_till_done(wait_background_tasks=True)
     expired = root / "front_door" / "2020-01-01"
     expired.mkdir(parents=True)
     (expired / "old.mp4").write_bytes(b"x")
 
     await hass.services.async_call(DOMAIN, SERVICE_SYNC_RECORDINGS, {}, blocking=True)
-    await hass.async_block_till_done()
+    await hass.async_block_till_done(wait_background_tasks=True)
 
     archived = list((root / "front_door" / f"{start:%Y-%m-%d}").glob("*.mp4"))
     assert [p.read_bytes() for p in archived] == [b"video"]
