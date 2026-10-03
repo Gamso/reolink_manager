@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from homeassistant.config_entries import ConfigEntryState
@@ -18,6 +18,7 @@ from custom_components.reolink_manager.const import (
     CONF_ARCHIVE_PATH,
     CONF_ARCHIVE_RETENTION_DAYS,
     CONF_ARCHIVE_STREAM,
+    CONF_REOLINK_ENTRY_ID,
     CONF_TRIGGER_ENTITIES,
     CONF_TRIGGER_SETTLE_SECONDS,
     DOMAIN,
@@ -333,3 +334,37 @@ async def test_unknown_trigger_is_named_from_its_raw_key(hass: HomeAssistant, ma
     state = hass.states.get("switch.front_door_ai_other_recording")
     assert state is not None
     assert state.attributes["friendly_name"] == "Front Door Ai Other recording"
+
+
+# --- config flow (user step) ------------------------------------------------------
+
+
+async def test_config_flow_creates_entry_for_a_loaded_reolink_entry(
+    hass: HomeAssistant, reolink_entry: MockConfigEntry
+) -> None:
+    result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": "user"})
+    assert result["type"] == "form"
+
+    with patch("custom_components.reolink_manager.async_setup_entry", return_value=True):
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"], {CONF_REOLINK_ENTRY_ID: reolink_entry.entry_id}
+        )
+        await hass.async_block_till_done()
+
+    assert result["type"] == "create_entry"
+    assert result["data"] == {CONF_REOLINK_ENTRY_ID: reolink_entry.entry_id}
+
+
+async def test_config_flow_reports_an_entry_unloaded_since_the_form_was_shown(
+    hass: HomeAssistant, reolink_entry: MockConfigEntry
+) -> None:
+    other = MockConfigEntry(domain="reolink", entry_id="reolink-entry-2", title="Garage")
+    other.add_to_hass(hass)
+    other.mock_state(hass, ConfigEntryState.LOADED)
+    result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": "user"})
+
+    other.mock_state(hass, ConfigEntryState.NOT_LOADED)
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], {CONF_REOLINK_ENTRY_ID: "reolink-entry-2"})
+
+    assert result["type"] == "form"
+    assert result["errors"] == {"base": "entry_not_loaded"}

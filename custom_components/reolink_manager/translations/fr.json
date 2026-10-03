@@ -9,6 +9,9 @@
         }
       }
     },
+    "error": {
+      "entry_not_loaded": "L'entrée de l'intégration Reolink choisie n'est plus chargée. Choisissez-en une autre, ou attendez qu'elle ait fini de se charger."
+    },
     "abort": {
       "no_reolink_entries": "Aucune entrée de l'intégration Reolink chargée n'a été trouvée (ou elles sont déjà toutes gérées par Reolink Manager). Configurez d'abord l'intégration Reolink officielle.",
       "already_configured": "Cette entrée de l'intégration Reolink est déjà gérée par Reolink Manager."

@@ -117,14 +117,20 @@ class ReolinkManagerConfigFlow(ConfigFlow, domain=DOMAIN):
         if not reolink_entries:
             return self.async_abort(reason="no_reolink_entries")
 
+        errors: dict[str, str] = {}
         if user_input is not None:
             reolink_entry_id = user_input[CONF_REOLINK_ENTRY_ID]
-            await self.async_set_unique_id(reolink_entry_id)
-            self._abort_if_unique_id_configured()
-            return self.async_create_entry(
-                title=reolink_entries[reolink_entry_id],
-                data={CONF_REOLINK_ENTRY_ID: reolink_entry_id},
-            )
+            # The picked entry may have been unloaded (or picked up by another
+            # flow) between showing the form and submitting it.
+            if reolink_entry_id not in reolink_entries:
+                errors["base"] = "entry_not_loaded"
+            else:
+                await self.async_set_unique_id(reolink_entry_id)
+                self._abort_if_unique_id_configured()
+                return self.async_create_entry(
+                    title=reolink_entries[reolink_entry_id],
+                    data={CONF_REOLINK_ENTRY_ID: reolink_entry_id},
+                )
 
         data_schema = vol.Schema(
             {
@@ -139,7 +145,7 @@ class ReolinkManagerConfigFlow(ConfigFlow, domain=DOMAIN):
                 )
             }
         )
-        return self.async_show_form(step_id="user", data_schema=data_schema)
+        return self.async_show_form(step_id="user", data_schema=data_schema, errors=errors)
 
 
 class ReolinkManagerOptionsFlow(OptionsFlow):

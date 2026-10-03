@@ -9,6 +9,9 @@
         }
       }
     },
+    "error": {
+      "entry_not_loaded": "The selected Reolink integration entry is no longer loaded. Pick another one, or wait for it to finish loading."
+    },
     "abort": {
       "no_reolink_entries": "No loaded Reolink integration entry was found (or all of them already have a Reolink Manager instance). Set up the official Reolink integration first.",
       "already_configured": "This Reolink integration entry is already managed by Reolink Manager."

@@ -88,6 +88,16 @@ async def test_creates_entry_from_selection() -> None:
     assert result["data"] == {CONF_REOLINK_ENTRY_ID: "r1"}
 
 
+async def test_entry_unloaded_since_form_was_shown_is_an_error_not_a_crash() -> None:
+    """r2 was offered, then unloaded before the user submitted it."""
+    flow = _make_flow([_reolink_entry("r1", "Front door"), _reolink_entry("r2", "Garage", ConfigEntryState.NOT_LOADED)])
+
+    result = await flow.async_step_user({CONF_REOLINK_ENTRY_ID: "r2"})
+
+    assert result["type"] == "form"
+    assert result["errors"] == {"base": "entry_not_loaded"}
+
+
 # --- archive path validation ------------------------------------------------
 
 
