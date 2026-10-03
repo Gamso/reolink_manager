@@ -83,7 +83,7 @@ def test_off_transition_schedules_one_sync(monkeypatch) -> None:
     entry.async_on_unload = MagicMock()
     entry_data = {"start_sync": MagicMock(), "start_recent_sync": MagicMock()}
 
-    _register_recording_triggers(hass, entry, entry_data, ["binary_sensor.animal"], 60)
+    _register_recording_triggers(hass, entry, entry_data["start_recent_sync"], ["binary_sensor.animal"], 60)
     captured["handler"](_change_event("on", "off"))
 
     assert len(captured["scheduled"]) == 1
@@ -102,7 +102,7 @@ def test_second_clear_before_settle_cancels_and_reschedules(monkeypatch) -> None
     entry.async_on_unload = MagicMock()
     entry_data = {"start_sync": MagicMock(), "start_recent_sync": MagicMock()}
 
-    _register_recording_triggers(hass, entry, entry_data, ["binary_sensor.animal"], 60)
+    _register_recording_triggers(hass, entry, entry_data["start_recent_sync"], ["binary_sensor.animal"], 60)
     captured["handler"](_change_event("on", "off"))
     first_cancel = captured["scheduled"][0]["cancel"]
 
@@ -124,7 +124,7 @@ def test_non_off_transition_does_not_schedule(monkeypatch) -> None:
     entry.async_on_unload = MagicMock()
     entry_data = {"start_sync": MagicMock(), "start_recent_sync": MagicMock()}
 
-    _register_recording_triggers(hass, entry, entry_data, ["binary_sensor.animal"], 60)
+    _register_recording_triggers(hass, entry, entry_data["start_recent_sync"], ["binary_sensor.animal"], 60)
     captured["handler"](_change_event("off", "off"))
 
     assert captured["scheduled"] == []

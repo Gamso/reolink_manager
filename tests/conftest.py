@@ -110,6 +110,18 @@ def reolink_entry(hass: HomeAssistant, api: MagicMock) -> MockConfigEntry:
 
 
 @pytest.fixture
+def new_reolink_runtime(hass: HomeAssistant, reolink_entry: MockConfigEntry):
+    """Return a function giving the reolink entry a new host/api, as its reload does."""
+
+    def _attach(table: dict[str, str] | None = None) -> MagicMock:
+        new_api = make_api(table)
+        attach_reolink_runtime(hass, reolink_entry, new_api)
+        return new_api
+
+    return _attach
+
+
+@pytest.fixture
 def manager_entry(hass: HomeAssistant, reolink_entry: MockConfigEntry) -> MockConfigEntry:
     """A Reolink Manager entry pointed at `reolink_entry`, not yet set up."""
     entry = MockConfigEntry(

@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from homeassistant.config_entries import ConfigEntryState
@@ -139,7 +140,7 @@ async def test_service_refuses_while_a_pass_is_running(
 ) -> None:
     hass.config_entries.async_update_entry(manager_entry, options=_options(str(tmp_path / "archive")))
     await _setup(hass, manager_entry)
-    hass.data[DOMAIN][manager_entry.entry_id]["archiver"]._running = True
+    manager_entry.runtime_data.archiver._running = True
 
     with pytest.raises(HomeAssistantError, match="already in progress"):
         await hass.services.async_call(DOMAIN, SERVICE_SYNC_RECORDINGS, {}, blocking=True)
@@ -175,3 +176,99 @@ async def test_options_flow_rejects_relative_path(hass: HomeAssistant, manager_e
 
     assert result["type"] == "form"
     assert result["errors"] == {CONF_ARCHIVE_PATH: "path_not_absolute"}
+
+
+# --- following the official Reolink entry ------------------------------------
+
+
+async def test_reolink_reload_moves_everything_to_the_new_host(
+    hass: HomeAssistant,
+    reolink_entry: MockConfigEntry,
+    manager_entry: MockConfigEntry,
+    api: MagicMock,
+    new_reolink_runtime,
+) -> None:
+    """Changing the Reolink entry's options reloads it with a brand-new host:
+    the switches must go unavailable meanwhile, then talk to the new api."""
+    await _setup(hass, manager_entry)
+    old_host = reolink_entry.runtime_data.host
+
+    reolink_entry.mock_state(hass, ConfigEntryState.UNLOAD_IN_PROGRESS)
+    await hass.async_block_till_done()
+    assert hass.states.get(MOTION).state == "unavailable"
+
+    reolink_entry.mock_state(hass, ConfigEntryState.NOT_LOADED)
+    await hass.async_block_till_done()
+    assert manager_entry.state is ConfigEntryState.LOADED  # waits, no pointless reload
+    assert hass.states.get(MOTION).state == "unavailable"
+
+    new_api = new_reolink_runtime({"MD": "1" * 168, "AI_ANIMAL": "1" * 168})
+    reolink_entry.mock_state(hass, ConfigEntryState.LOADED)
+    await hass.async_block_till_done()
+
+    assert manager_entry.state is ConfigEntryState.LOADED
+    assert manager_entry.runtime_data.host is reolink_entry.runtime_data.host
+    assert manager_entry.runtime_data.host is not old_host
+    assert hass.states.get(ANIMAL).state == "on"  # read from the new host's cache
+    old_host.async_unregister_update_cmd.assert_any_call("GetRec", 0)
+
+    await hass.services.async_call("switch", "turn_off", {"entity_id": MOTION}, blocking=True)
+    new_api.send_setting.assert_awaited_once()
+    api.send_setting.assert_not_awaited()
+
+
+async def test_reolink_unload_stops_a_running_archive_pass(
+    hass: HomeAssistant, reolink_entry: MockConfigEntry, manager_entry: MockConfigEntry, api: MagicMock, tmp_path: Path
+) -> None:
+    started = asyncio.Event()
+
+    async def _hang(*_args, **_kwargs):
+        started.set()
+        await asyncio.sleep(3600)
+
+    api.request_vod_files = AsyncMock(side_effect=_hang)
+    hass.config_entries.async_update_entry(manager_entry, options=_options(str(tmp_path / "archive")))
+    await _setup(hass, manager_entry)
+    await hass.services.async_call(DOMAIN, SERVICE_SYNC_RECORDINGS, {}, blocking=True)
+    await asyncio.wait_for(started.wait(), 5)
+    task = manager_entry.runtime_data.sync_task
+
+    reolink_entry.mock_state(hass, ConfigEntryState.UNLOAD_IN_PROGRESS)
+    await hass.async_block_till_done()
+
+    assert task.cancelled()
+    assert manager_entry.runtime_data.archiver.running is False
+    with pytest.raises(HomeAssistantError, match="not loaded"):
+        await hass.services.async_call(DOMAIN, SERVICE_SYNC_RECORDINGS, {}, blocking=True)
+
+
+async def test_removed_reolink_entry_leaves_manager_waiting(
+    hass: HomeAssistant, reolink_entry: MockConfigEntry, manager_entry: MockConfigEntry
+) -> None:
+    await _setup(hass, manager_entry)
+
+    await hass.config_entries.async_remove(reolink_entry.entry_id)
+    await hass.async_block_till_done()
+
+    assert manager_entry.state is ConfigEntryState.SETUP_RETRY
+
+
+# --- schedule refresh through the official coordinator --------------------------
+
+
+async def test_switches_follow_the_official_coordinator_refresh(
+    hass: HomeAssistant, reolink_entry: MockConfigEntry, manager_entry: MockConfigEntry, api: MagicMock
+) -> None:
+    """GetRec is only polled for registered channels; the switches register
+    it themselves and are written on every coordinator refresh."""
+    await _setup(hass, manager_entry)
+    host = reolink_entry.runtime_data.host
+    host.async_register_update_cmd.assert_any_call("GetRec", 0)
+    assert hass.states.get(ANIMAL).state == "off"
+
+    # Changed from the Reolink app; the next official poll re-reads GetRecV20.
+    api._recording_settings[0]["schedule"]["table"]["AI_ANIMAL"] = "1" * 168
+    await reolink_entry.runtime_data.device_coordinator.async_refresh()
+    await hass.async_block_till_done()
+
+    assert hass.states.get(ANIMAL).state == "on"

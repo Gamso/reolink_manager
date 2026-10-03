@@ -56,6 +56,17 @@ Reolink entities (matching the official integration's device-identifier
 scheme), so they show up alongside `switch.<camera>_record` rather than under
 a separate device.
 
+Their state follows the official integration's own periodic poll: each switch
+asks it to include `GetRecV20` for its channel (the official integration
+otherwise only polls it while its own `switch.<camera>_record` is enabled), so
+a schedule changed from the Reolink app shows up at the next poll, without any
+request of Reolink Manager's own.
+
+Reolink Manager also follows the Reolink entry's lifecycle. While that entry is
+reloading (after changing its options, a reauthentication...) or unloaded, the
+switches are unavailable and any archive pass in progress is stopped; once it is
+loaded again, Reolink Manager reloads itself on top of the new connection.
+
 ## Recording archive
 
 Playing recordings straight from the camera is slow: they stream over the

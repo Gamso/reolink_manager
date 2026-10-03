@@ -29,10 +29,13 @@ from homeassistant.components.switch import SwitchEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
-from homeassistant.helpers.entity import DeviceInfo
+from homeassistant.helpers.device_registry import DeviceInfo
+from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import DOMAIN, TRIGGER_LABELS
+from .const import SIGNAL_REOLINK_AVAILABILITY, TRIGGER_LABELS
+from .data import ReolinkManagerConfigEntry, ReolinkManagerData
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -40,6 +43,11 @@ _LOGGER = logging.getLogger(__name__)
 # switches show up on the same HA device as the camera's own entities
 # instead of spawning a duplicate device.
 REOLINK_DOMAIN = "reolink"
+
+# The official integration's update command for the recording settings, as
+# registered by its own switch.record (`cmd_key="GetRec"`); reolink_aio sends
+# GetRecV20 for it on firmware that supports it.
+UPDATE_CMD = "GetRec"
 
 
 def _schedule_table(api: Any, channel: int) -> dict[str, str]:
@@ -71,12 +79,11 @@ def _device_identifier(host: Any, api: Any, channel: int) -> str:
 
 
 async def async_setup_entry(
-    hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback
+    hass: HomeAssistant, entry: ReolinkManagerConfigEntry, async_add_entities: AddEntitiesCallback
 ) -> None:
     """Set up Reolink Manager switches from a config entry."""
-    entry_data = hass.data[DOMAIN][entry.entry_id]
-    api = entry_data["api"]
-    host = entry_data["host"]
+    data = entry.runtime_data
+    api = data.api
 
     entities: list[ReolinkScheduleSwitch] = []
     for channel in api.channels:
@@ -100,36 +107,63 @@ async def async_setup_entry(
             continue
 
         for trigger_key in table:
-            entities.append(ReolinkScheduleSwitch(entry, host, api, channel, trigger_key))
+            entities.append(ReolinkScheduleSwitch(entry, data, channel, trigger_key))
 
     async_add_entities(entities)
 
 
-class ReolinkScheduleSwitch(SwitchEntity):
-    """Toggle one recording-schedule trigger type on/off for a whole week."""
+class ReolinkScheduleSwitch(CoordinatorEntity, SwitchEntity):
+    """Toggle one recording-schedule trigger type on/off for a whole week.
+
+    State comes from reolink_aio's GetRecV20 cache, refreshed by the official
+    integration's device coordinator - but that coordinator only sends the
+    commands some entity registered for: GetRec is registered by the
+    official `switch.<camera>_record`, and only while that switch is enabled.
+    So each switch registers GetRec for its channel itself, exactly like the
+    official channel entities do, and is written whenever that coordinator
+    refreshes. No polling and no request of our own: one more command in the
+    official integration's existing batched poll.
+    """
 
     _attr_has_entity_name = True
-    # Polling here costs nothing - `is_on` just reads the dict reolink_aio
-    # already refreshes on its own GetRecV20 polls, with no I/O of our own.
-    # Without it the switch would keep showing whatever the schedule was at
-    # startup, even after being changed from the Reolink app.
-    _attr_should_poll = True
 
-    def __init__(self, entry: ConfigEntry, host: Any, api: Any, channel: int, trigger_key: str) -> None:
-        self._api = api
+    def __init__(self, entry: ConfigEntry, data: ReolinkManagerData, channel: int, trigger_key: str) -> None:
+        super().__init__(data.coordinator)
+        self._data = data
+        self._api = data.api
         self._channel = channel
         self._trigger_key = trigger_key
+        self._availability_signal = SIGNAL_REOLINK_AVAILABILITY.format(entry.entry_id)
 
         label = TRIGGER_LABELS.get(trigger_key, trigger_key.replace("_", " ").title())
         self._attr_name = f"{label} recording"
         self._attr_unique_id = f"{entry.entry_id}_{channel}_{trigger_key}_recording"
         self._attr_device_info = DeviceInfo(
-            identifiers={(REOLINK_DOMAIN, _device_identifier(host, api, channel))},
+            identifiers={(REOLINK_DOMAIN, _device_identifier(data.host, data.api, channel))},
         )
+
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+        self._data.host.async_register_update_cmd(UPDATE_CMD, self._channel)
+        self.async_on_remove(
+            async_dispatcher_connect(
+                self.hass,
+                self._availability_signal,
+                self.async_write_ha_state,
+            )
+        )
+
+    async def async_will_remove_from_hass(self) -> None:
+        self._data.host.async_unregister_update_cmd(UPDATE_CMD, self._channel)
+        await super().async_will_remove_from_hass()
 
     @property
     def available(self) -> bool:
-        return self._trigger_key in _schedule_table(self._api, self._channel)
+        return (
+            super().available
+            and self._data.is_current()
+            and self._trigger_key in _schedule_table(self._api, self._channel)
+        )
 
     @property
     def is_on(self) -> bool:

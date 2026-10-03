@@ -55,10 +55,13 @@ def test_device_identifier_nvr_without_uid_falls_back_to_channel() -> None:
 
 def _make_switch(api: MagicMock, channel: int, trigger_key: str) -> ReolinkScheduleSwitch:
     entry = MagicMock(entry_id="entry-1")
-    host = MagicMock(unique_id="host-1")
-    host_api = MagicMock(is_nvr=False)
-    switch = ReolinkScheduleSwitch(entry, host, host_api, channel, trigger_key)
-    switch._api = api  # bypass constructor's DeviceInfo lookup against a different mock
+    api.is_nvr = False
+    data = MagicMock()
+    data.api = api
+    data.host = MagicMock(unique_id="host-1")
+    data.coordinator = MagicMock(last_update_success=True)
+    data.is_current = MagicMock(return_value=True)
+    switch = ReolinkScheduleSwitch(entry, data, channel, trigger_key)
     # The entity was never added to hass by a platform, so async_write_ha_state's
     # own writable-state check would reject it; that check isn't what these
     # tests are about, so stub it out and assert on it directly where it matters.
@@ -165,3 +168,13 @@ async def test_set_raises_when_trigger_key_no_longer_present() -> None:
 
     with pytest.raises(HomeAssistantError):
         await switch.async_turn_on()
+
+
+def test_unavailable_while_the_reolink_entry_is_not_current() -> None:
+    api = _api_with_table(0, {"MD": "1" * 168})
+    switch = _make_switch(api, 0, "MD")
+    assert switch.available is True
+
+    switch._data.is_current.return_value = False
+
+    assert switch.available is False

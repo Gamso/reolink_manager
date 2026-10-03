@@ -65,3 +65,7 @@ DEFAULT_TRIGGER_SETTLE_SECONDS = 60
 
 SERVICE_SYNC_RECORDINGS = "sync_recordings"
 
+
+# Dispatched (formatted with the entry id) when the official Reolink entry stops
+# being usable, so the switches re-evaluate their availability.
+SIGNAL_REOLINK_AVAILABILITY = DOMAIN + "_reolink_availability_{}"
