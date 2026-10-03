@@ -5,9 +5,15 @@ vehicle, animal, ...) for one channel, by editing the per-hour bitstring that
 `SetRecV20`/`GetRecV20` use (see the Reolink HTTP API guide, `Rec.schedule.table`).
 reolink_aio caches this table verbatim in `Host._recording_settings` but has no
 public accessor for it - the official integration only ever reads/writes the
-single `enable` flag. There's no clean API to build on, so this reaches into
-the cached dict directly and writes it back through the already-public
-`send_setting()`.
+single `enable` flag. There's no clean API to build on, so this reads the
+cached dict directly and writes through the already-public `send_setting()`.
+
+The cached dict is shared with the official integration, so it is never
+mutated here: a change is sent as a fresh `{"schedule": {"channel", "table"}}`
+body - nothing else of the cached `Rec` (enable, scheduleEnable, overwrite,
+saveDay, postRec...) is resent - and `send_setting()` re-reads `GetRecV20`
+into the cache once the camera has accepted it. A failed write therefore
+leaves the cache, and `is_on`, reflecting the camera.
 
 Turning a switch on/off always writes a full week of 1s or 0s for that trigger,
 never a partial schedule: that's the on/off control the user actually wants,
@@ -37,9 +43,14 @@ REOLINK_DOMAIN = "reolink"
 
 
 def _schedule_table(api: Any, channel: int) -> dict[str, str]:
-    """Return the cached per-hour schedule table for a channel, if any."""
+    """Return the cached per-trigger schedule table for a channel, if any.
+
+    Only `GetRecV20` reports a per-trigger dict; the legacy `GetRec` table is
+    a single bitstring with no trigger breakdown, which yields no switch.
+    """
     params = api._recording_settings.get(channel, {})  # pylint: disable=protected-access
-    return params.get("schedule", {}).get("table", {}) or {}
+    table = params.get("schedule", {}).get("table")
+    return table if isinstance(table, dict) else {}
 
 
 def _device_identifier(host: Any, api: Any, channel: int) -> str:
@@ -132,22 +143,34 @@ class ReolinkScheduleSwitch(SwitchEntity):
         await self._async_set(False)
 
     async def _async_set(self, enabled: bool) -> None:
-        params = self._api._recording_settings.get(self._channel)  # pylint: disable=protected-access
-        table = (params or {}).get("schedule", {}).get("table")
-        if not params or table is None or self._trigger_key not in table:
+        table = _schedule_table(self._api, self._channel)
+        if self._trigger_key not in table:
             raise HomeAssistantError(
                 f"Camera on channel {self._channel} no longer exposes trigger '{self._trigger_key}'"
             )
 
-        bit = "1" if enabled else "0"
-        table[self._trigger_key] = bit * len(table[self._trigger_key])
+        # A copy: the cached table belongs to reolink_aio (and so to the
+        # official integration) and must only change once the camera agreed.
+        new_table = dict(table)
+        new_table[self._trigger_key] = ("1" if enabled else "0") * len(table[self._trigger_key])
 
-        if self._api.api_version("GetRec") >= 1:
-            params["scheduleEnable"] = 1
-            body = [{"cmd": "SetRecV20", "action": 0, "param": {"Rec": params}}]
-        else:
-            params.setdefault("schedule", {})["enable"] = 1
-            body = [{"cmd": "SetRec", "action": 0, "param": {"Rec": params}}]
-
-        await self._api.send_setting(body)
+        # Only the schedule: the global recording flags (`scheduleEnable`,
+        # `enable`) belong to the official integration's switch.record and
+        # are left as they are, so turning one trigger off never re-enables
+        # recording the user had turned off there.
+        cmd = "SetRecV20" if self._api.api_version("GetRec") >= 1 else "SetRec"
+        body = [
+            {
+                "cmd": cmd,
+                "action": 0,
+                "param": {"Rec": {"schedule": {"channel": self._channel, "table": new_table}}},
+            }
+        ]
+        try:
+            # On success reolink_aio re-reads GetRecV20 into its cache.
+            await self._api.send_setting(body)
+        except Exception as err:  # pylint: disable=broad-exception-caught
+            raise HomeAssistantError(
+                f"Could not update the recording schedule of {self._api.camera_name(self._channel)}: {err}"
+            ) from err
         self.async_write_ha_state()

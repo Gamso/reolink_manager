@@ -47,7 +47,9 @@ manage" - picked once in its config flow. At setup it:
    `AI_VEHICLE`, `AI_ANIMAL`, `TIMING`, ...).
 4. Turning a switch on/off overwrites that trigger's entire weekly bitstring
    with all-1s or all-0s and sends it back via `SetRecV20`/`SetRec` - a
-   blanket on/off, not a partial schedule edit.
+   blanket on/off, not a partial schedule edit. Only the schedule table is
+   sent: the global recording switch (`switch.<camera>_record`) is left as it
+   is, so turning one trigger on or off never re-enables recording overall.
 
 Switches are attached to the *same* Home Assistant device as the camera's own
 Reolink entities (matching the official integration's device-identifier
