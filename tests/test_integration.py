@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import timedelta
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -11,6 +12,7 @@ from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import entity_registry as er
+from homeassistant.util import dt as dt_util
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.reolink_manager.const import (
@@ -368,3 +370,52 @@ async def test_config_flow_reports_an_entry_unloaded_since_the_form_was_shown(
 
     assert result["type"] == "form"
     assert result["errors"] == {"base": "entry_not_loaded"}
+
+
+# --- a complete archive pass ------------------------------------------------------
+
+
+async def test_full_archive_pass_downloads_and_prunes(
+    hass: HomeAssistant, manager_entry: MockConfigEntry, api: MagicMock, tmp_path: Path
+) -> None:
+    """Service -> background pass: lists the window, downloads what is new
+    under <camera>/<date>/, and prunes copies older than the retention."""
+    root = tmp_path / "archive"
+    now = dt_util.now()
+    start = now - timedelta(hours=2)
+    vod = MagicMock()
+    vod.start_time = start
+    vod.end_time = start + timedelta(minutes=1)
+    vod.triggers = []
+    vod.file_name = "Mp4Record/clip.mp4"
+    vod.size = 5
+    vod.start_time_id = vod.end_time_id = "x"
+
+    async def _request(_channel, day_start, day_end, stream=None):
+        return [], [vod] if day_start <= start <= day_end else []
+
+    async def _chunks(_size):
+        yield b"video"
+
+    download = MagicMock(length=5)
+    download.stream.iter_chunked = _chunks
+    api.request_vod_files = AsyncMock(side_effect=_request)
+    api.download_vod = AsyncMock(return_value=download)
+
+    hass.config_entries.async_update_entry(manager_entry, options=_options(str(root), **{CONF_ARCHIVE_RETENTION_DAYS: 2}))
+    await _setup(hass, manager_entry)
+    # A first pass creates the archive; then plant an expired copy in it.
+    await hass.services.async_call(DOMAIN, SERVICE_SYNC_RECORDINGS, {}, blocking=True)
+    await hass.async_block_till_done()
+    expired = root / "front_door" / "2020-01-01"
+    expired.mkdir(parents=True)
+    (expired / "old.mp4").write_bytes(b"x")
+
+    await hass.services.async_call(DOMAIN, SERVICE_SYNC_RECORDINGS, {}, blocking=True)
+    await hass.async_block_till_done()
+
+    archived = list((root / "front_door" / f"{start:%Y-%m-%d}").glob("*.mp4"))
+    assert [p.read_bytes() for p in archived] == [b"video"]
+    assert api.download_vod.await_count == 1  # second pass: already archived
+    assert not expired.exists()
+    assert api.request_vod_files.await_args.kwargs["stream"] == "sub"
