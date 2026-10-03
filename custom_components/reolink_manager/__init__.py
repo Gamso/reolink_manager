@@ -127,7 +127,9 @@ def _register_recording_triggers(
     @callback
     def _fire(_now) -> None:
         cancel_pending["cancel"] = None
-        entry_data["start_sync"]()
+        # The recording that just finished is from today: no need to re-list
+        # the whole retention window after every detection.
+        entry_data["start_recent_sync"]()
 
     @callback
     def _handle_state_change(event: Event) -> None:
@@ -242,7 +244,17 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 hass, archiver.async_sync(), f"{DOMAIN} archive sync {entry.entry_id}"
             )
 
+        @callback
+        def _start_recent_sync() -> None:
+            """Like _start_sync, but only for today's recordings (detection trigger)."""
+            entry.async_create_background_task(
+                hass,
+                archiver.async_sync(recent_only=True),
+                f"{DOMAIN} recent archive sync {entry.entry_id}",
+            )
+
         entry_data["start_sync"] = _start_sync
+        entry_data["start_recent_sync"] = _start_recent_sync
 
         interval_hours = entry.options.get(
             CONF_ARCHIVE_INTERVAL_HOURS, DEFAULT_ARCHIVE_INTERVAL_HOURS

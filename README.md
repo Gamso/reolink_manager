@@ -79,9 +79,10 @@ saving the options reloads the entry, which restarts that 5-minute timer** - so
 repeatedly tweaking settings can keep postponing the first catch-up. Call the
 service if you don't want to wait.
 
-Every pass re-checks the whole retention window, not just what's new since last
-time: it lists what the camera holds and downloads whatever isn't on disk yet.
-So a freshly configured archive catches up on the last N days on its own.
+Every periodic (or service-started) pass re-checks the whole retention window,
+not just what's new since last time: it lists what the camera holds and
+downloads whatever isn't on disk yet, then prunes. So a freshly configured
+archive catches up on the last N days on its own.
 
 ### Reading the logs
 
@@ -108,7 +109,11 @@ The periodic interval alone means a new recording can sit unarchived for up to
 that whole interval. To pick it up sooner, pick the detection sensors under
 **"Sync immediately when these clear"** - e.g.
 `binary_sensor.e1_zoom_bureau_animal_domestique`. This is additional to the
-periodic schedule, not a replacement for it.
+periodic schedule, not a replacement for it. Such a detection-triggered sync
+only lists *today's* recordings (and yesterday's too during the first hour
+after midnight) and doesn't prune: the recording that just finished is
+recent, and re-listing the whole retention window on every detection would
+cost one camera request per day of retention and per channel each time.
 
 The trigger fires on the sensor's 1 -> 0 transition (detected -> clear), not on
 0 -> 1, because the recording isn't finished - and so isn't listed by the

@@ -14,8 +14,10 @@ from custom_components.reolink_manager.vod_archive import (
     ArchiveRootError,
     VodArchiver,
     _is_still_recording,
+    _existing_files,
     _prepare_root,
     _prune_archive,
+    _recent_window_start,
     _target_path,
     _trigger_slug,
     _vod_size,
@@ -578,3 +580,63 @@ async def test_download_that_never_starts_times_out(tmp_path: Path, monkeypatch)
     stats = await asyncio.wait_for(archiver._async_sync_channel(0, now - timedelta(days=1), now), 5)
 
     assert stats.failed == 1
+
+
+# --- detection-triggered (recent-only) passes --------------------------------
+
+
+def _local_tz():
+    """Home Assistant's configured time zone, which local midnight is based on."""
+    return vod_archive.dt_util.get_default_time_zone()
+
+
+def test_recent_window_starts_at_local_midnight() -> None:
+    now = datetime(2026, 9, 3, 14, 0, tzinfo=_local_tz())
+    assert _recent_window_start(now) == datetime(2026, 9, 3, 0, 0, tzinfo=_local_tz())
+
+
+def test_recent_window_includes_yesterday_just_after_midnight() -> None:
+    now = datetime(2026, 9, 3, 0, 20, tzinfo=_local_tz())
+    assert _recent_window_start(now) == datetime(2026, 9, 2, 0, 0, tzinfo=_local_tz())
+
+
+async def test_recent_only_pass_lists_one_day_and_does_not_prune(tmp_path: Path, monkeypatch) -> None:
+    now = datetime(2026, 9, 3, 14, 0, tzinfo=_local_tz())
+    monkeypatch.setattr(vod_archive.dt_util, "now", lambda: now)
+    _prepare_root(tmp_path)
+    old = _seed_archive(tmp_path, "front_door", "2026-01-01", ["old.mp4"])
+    api = _api([])
+    archiver = VodArchiver(_hass(), api, root=tmp_path, retention_days=30, stream="main")
+
+    await archiver.async_sync(recent_only=True)
+
+    assert api.request_vod_files.call_count == 1
+    assert api.request_vod_files.call_args.args[1] == datetime(2026, 9, 3, 0, 0, tzinfo=_local_tz())
+    assert (old / "old.mp4").exists()
+
+    await archiver.async_sync()  # a full pass still covers the window and prunes
+
+    assert api.request_vod_files.call_count == 1 + 31
+    assert not (old / "old.mp4").exists()
+
+
+def test_existing_files_checks_each_day_folder_once(tmp_path: Path) -> None:
+    day = tmp_path / "front_door" / "2026-09-01"
+    day.mkdir(parents=True)
+    (day / "a.mp4").write_bytes(b"x")
+    targets = [day / "a.mp4", day / "b.mp4", tmp_path / "front_door" / "2026-09-02" / "c.mp4"]
+
+    assert _existing_files(targets) == {day / "a.mp4"}
+
+
+async def test_sync_channel_checks_existence_in_one_executor_job(tmp_path: Path) -> None:
+    _prepare_root(tmp_path)
+    now = datetime(2026, 9, 1, 12, 0, tzinfo=timezone.utc)
+    vods = [_vod_file(now - timedelta(hours=h, minutes=1), now - timedelta(hours=h)) for h in (2, 3, 4)]
+    hass = _hass()
+    archiver = VodArchiver(hass, _api(vods), root=tmp_path, retention_days=7, stream="main")
+
+    await archiver._async_sync_channel(0, now - timedelta(days=1), now)
+
+    funcs = [call.args[0] for call in hass.async_add_executor_job.await_args_list]
+    assert funcs.count(_existing_files) == 1

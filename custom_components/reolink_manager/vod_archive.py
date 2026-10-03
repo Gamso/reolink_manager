@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import re
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
@@ -53,6 +54,13 @@ DOWNLOAD_FILE_TIMEOUT_SECONDS = 3 * 60 * 60
 # name, and the existence check would never re-fetch it; leave it for the next
 # pass instead.
 STILL_RECORDING_MARGIN = timedelta(minutes=2)
+
+# A detection-triggered pass only lists today's recordings - the one that just
+# finished is there - instead of the whole retention window, which would cost
+# one Search request per day of retention and per channel after every
+# detection. Within this long after midnight it lists yesterday too, so a
+# recording that ended just before midnight is not left to the next full pass.
+RECENT_SYNC_MIDNIGHT_MARGIN = timedelta(hours=1)
 
 # Downloads land on `<name>.mp4.part` and are renamed only once complete, so an
 # interrupted run never leaves a short file that looks like a finished one.
@@ -258,22 +266,26 @@ class VodArchiver:
         """Return True while an archive pass is in progress."""
         return self._running
 
-    async def async_sync(self) -> None:
+    async def async_sync(self, *, recent_only: bool = False) -> None:
         """Run one archive pass, unless one is already in progress.
 
         Overlapping passes are skipped rather than queued: they would fight
         over the camera's single connection and re-download the same files.
+
+        A full pass (periodic, service) re-checks the whole retention window
+        and prunes; a `recent_only` pass (detection trigger) only lists today,
+        plus yesterday shortly after midnight, and does not prune.
         """
         if self._running:
             _LOGGER.debug("Archive pass already in progress for %s; skipping", self._root)
             return
         self._running = True
         try:
-            await self._async_sync()
+            await self._async_sync(recent_only)
         finally:
             self._running = False
 
-    async def _async_sync(self) -> None:
+    async def _async_sync(self, recent_only: bool) -> None:
         try:
             await self._hass.async_add_executor_job(_prepare_root, self._root)
         except OSError as err:
@@ -294,6 +306,8 @@ class VodArchiver:
 
         now = dt_util.now()
         window_start = now - timedelta(days=self._retention_days)
+        if recent_only:
+            window_start = max(window_start, _recent_window_start(now))
         started = monotonic()
         _LOGGER.debug(
             "Archive pass starting: '%s' stream, recordings since %s, into %s",
@@ -313,7 +327,9 @@ class VodArchiver:
             return
 
         cutoff = (now - timedelta(days=self._retention_days)).date()
-        removed = await self._hass.async_add_executor_job(_prune_archive, self._root, cutoff)
+        removed = 0
+        if not recent_only:
+            removed = await self._hass.async_add_executor_job(_prune_archive, self._root, cutoff)
 
         # An uneventful pass (nothing new, nothing pruned) is the normal case
         # every few hours, so it stays at debug; anything that actually changed
@@ -384,19 +400,21 @@ class VodArchiver:
         # returned by both days' searches (the camera's Search matches any
         # recording overlapping the window, not only ones starting inside it)
         # and would otherwise be downloaded twice.
-        pending: dict[Path, Any] = {}
-        seen: set[Path] = set()
+        candidates: dict[Path, Any] = {}
         for vod_file in vod_files:
             if _is_still_recording(vod_file.end_time, now):
                 continue
-            target = _target_path(self._root, camera_dir, vod_file)
-            if target in seen:
-                continue
-            seen.add(target)
-            if await self._hass.async_add_executor_job(target.exists):
+            candidates.setdefault(_target_path(self._root, camera_dir, vod_file), vod_file)
+
+        # One executor job (one listdir per day folder) for the whole channel,
+        # rather than one per listed recording.
+        existing = await self._hass.async_add_executor_job(_existing_files, list(candidates))
+        pending: dict[Path, Any] = {}
+        for target, vod_file in candidates.items():
+            if target in existing:
                 stats.already_archived += 1
-                continue
-            pending[target] = vod_file
+            else:
+                pending[target] = vod_file
 
         _LOGGER.debug(
             "%s (channel %s): %d recording(s) listed, %d already archived, %d to download",
@@ -499,6 +517,29 @@ class VodArchiver:
         finally:
             await self._hass.async_add_executor_job(handle.close)
         return written
+
+
+def _recent_window_start(now: datetime) -> datetime:
+    """Return where a detection-triggered pass starts listing."""
+    start = dt_util.start_of_local_day(now)
+    if now - start < RECENT_SYNC_MIDNIGHT_MARGIN:
+        start -= timedelta(days=1)
+    return start
+
+
+def _existing_files(targets: list[Path]) -> set[Path]:
+    """Return which of *targets* already exist. Blocking; run in an executor.
+
+    Lists each distinct parent folder once instead of stat-ing every file.
+    """
+    existing: set[Path] = set()
+    for parent in {target.parent for target in targets}:
+        try:
+            names = set(os.listdir(parent))
+        except FileNotFoundError:
+            continue
+        existing.update(target for target in targets if target.parent == parent and target.name in names)
+    return existing
 
 
 def _make_parent(root: Path, target: Path) -> None:
