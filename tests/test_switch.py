@@ -8,6 +8,7 @@ from homeassistant.exceptions import HomeAssistantError
 from custom_components.reolink_manager.switch import (
     ReolinkScheduleSwitch,
     _device_identifier,
+    _unique_id,
     _schedule_table,
 )
 
@@ -178,3 +179,17 @@ def test_unavailable_while_the_reolink_entry_is_not_current() -> None:
     switch._data.is_current.return_value = False
 
     assert switch.available is False
+
+
+def test_unique_id_standalone_camera_uses_host_and_channel() -> None:
+    host = MagicMock(unique_id="host-1")
+    api = MagicMock(is_nvr=False)
+    assert _unique_id(host, api, 0, "AI_PEOPLE") == "host-1_0_AI_PEOPLE_recording"
+
+
+def test_unique_id_nvr_uses_camera_uid_so_moving_a_camera_keeps_it() -> None:
+    host = MagicMock(unique_id="nvr-1")
+    api = MagicMock(is_nvr=True)
+    api.supported = MagicMock(return_value=True)
+    api.camera_uid = MagicMock(return_value="cam-uid-42")
+    assert _unique_id(host, api, 3, "MD") == "nvr-1_cam-uid-42_MD_recording"

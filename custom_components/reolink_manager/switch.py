@@ -27,14 +27,19 @@ from typing import Any
 
 from homeassistant.components.switch import SwitchEntity
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import SIGNAL_REOLINK_AVAILABILITY, TRIGGER_LABELS
+from .const import (
+    SIGNAL_REOLINK_AVAILABILITY,
+    TRIGGER_FALLBACK_TRANSLATION_KEY,
+    TRIGGER_TRANSLATION_KEYS,
+)
 from .data import ReolinkManagerConfigEntry, ReolinkManagerData
 
 _LOGGER = logging.getLogger(__name__)
@@ -78,12 +83,56 @@ def _device_identifier(host: Any, api: Any, channel: int) -> str:
     return f"{host.unique_id}_ch{channel}"
 
 
+def _unique_id(host: Any, api: Any, channel: int, trigger_key: str) -> str:
+    """Return a switch's unique_id, derived from the camera, not the config entry.
+
+    Same channel prefix as the official `ReolinkChannelCoordinatorEntity`
+    (camera UID on an NVR when available, channel number otherwise), so
+    removing and re-adding the Reolink Manager entry gives the switches back
+    their entity_id, settings and history instead of new `_2` duplicates.
+    """
+    if api.is_nvr and api.supported(channel, "UID"):
+        prefix = f"{host.unique_id}_{api.camera_uid(channel)}"
+    else:
+        prefix = f"{host.unique_id}_{channel}"
+    return f"{prefix}_{trigger_key}_recording"
+
+
+async def _async_migrate_unique_ids(hass: HomeAssistant, entry: ConfigEntry, data: ReolinkManagerData) -> None:
+    """Move switches from the old `<entry_id>_<channel>_<KEY>_recording` unique_ids.
+
+    Version 0.1.x keyed them on the config entry id. Rewriting the registry
+    entries in place keeps their entity_id (and so their history) and any
+    user customisation.
+    """
+    old_prefix = f"{entry.entry_id}_"
+
+    @callback
+    def _migrate(entity_entry: er.RegistryEntry) -> dict[str, Any] | None:
+        if not entity_entry.unique_id.startswith(old_prefix):
+            return None
+        channel_str, _, rest = entity_entry.unique_id.removeprefix(old_prefix).partition("_")
+        if not channel_str.isdigit() or not rest.endswith("_recording"):
+            return None
+        channel = int(channel_str)
+        if channel not in data.api.channels:
+            return None
+        trigger_key = rest.removesuffix("_recording")
+        new_unique_id = _unique_id(data.host, data.api, channel, trigger_key)
+        _LOGGER.debug("Migrating %s unique_id to %s", entity_entry.entity_id, new_unique_id)
+        return {"new_unique_id": new_unique_id}
+
+    await er.async_migrate_entries(hass, entry.entry_id, _migrate)
+
+
 async def async_setup_entry(
     hass: HomeAssistant, entry: ReolinkManagerConfigEntry, async_add_entities: AddEntitiesCallback
 ) -> None:
     """Set up Reolink Manager switches from a config entry."""
     data = entry.runtime_data
     api = data.api
+
+    await _async_migrate_unique_ids(hass, entry, data)
 
     entities: list[ReolinkScheduleSwitch] = []
     for channel in api.channels:
@@ -135,9 +184,12 @@ class ReolinkScheduleSwitch(CoordinatorEntity, SwitchEntity):
         self._trigger_key = trigger_key
         self._availability_signal = SIGNAL_REOLINK_AVAILABILITY.format(entry.entry_id)
 
-        label = TRIGGER_LABELS.get(trigger_key, trigger_key.replace("_", " ").title())
-        self._attr_name = f"{label} recording"
-        self._attr_unique_id = f"{entry.entry_id}_{channel}_{trigger_key}_recording"
+        if trigger_key in TRIGGER_TRANSLATION_KEYS:
+            self._attr_translation_key = TRIGGER_TRANSLATION_KEYS[trigger_key]
+        else:
+            self._attr_translation_key = TRIGGER_FALLBACK_TRANSLATION_KEY
+            self._attr_translation_placeholders = {"trigger": trigger_key.replace("_", " ").title()}
+        self._attr_unique_id = _unique_id(data.host, data.api, channel, trigger_key)
         self._attr_device_info = DeviceInfo(
             identifiers={(REOLINK_DOMAIN, _device_identifier(data.host, data.api, channel))},
         )

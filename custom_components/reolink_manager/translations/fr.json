@@ -44,6 +44,34 @@
       "path_not_empty": "Le dossier d'archive contient déjà des fichiers et n'est pas une archive Reolink Manager. Choisissez un dossier vide ou nouveau : les anciens enregistrements y sont purgés, il ne doit donc rien contenir d'autre."
     }
   },
+  "entity": {
+    "switch": {
+      "motion_recording": {
+        "name": "Enregistrement sur mouvement"
+      },
+      "continuous_recording": {
+        "name": "Enregistrement continu"
+      },
+      "person_recording": {
+        "name": "Enregistrement sur personne"
+      },
+      "vehicle_recording": {
+        "name": "Enregistrement sur véhicule"
+      },
+      "animal_recording": {
+        "name": "Enregistrement sur animal"
+      },
+      "pet_recording": {
+        "name": "Enregistrement sur animal domestique"
+      },
+      "face_recording": {
+        "name": "Enregistrement sur visage"
+      },
+      "trigger_recording": {
+        "name": "Enregistrement sur {trigger}"
+      }
+    }
+  },
   "selector": {
     "archive_stream": {
       "options": {

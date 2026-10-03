@@ -24,6 +24,7 @@ from custom_components.reolink_manager.const import (
     SERVICE_SYNC_RECORDINGS,
 )
 
+HOST_UNIQUE_ID = "aa:bb:cc:dd:ee:ff"  # see conftest
 MOTION = "switch.front_door_motion_recording"
 ANIMAL = "switch.front_door_animal_recording"
 
@@ -272,3 +273,63 @@ async def test_switches_follow_the_official_coordinator_refresh(
     await hass.async_block_till_done()
 
     assert hass.states.get(ANIMAL).state == "on"
+
+
+# --- entity identity -----------------------------------------------------------
+
+
+async def test_old_entry_based_unique_ids_are_migrated_keeping_entity_ids(
+    hass: HomeAssistant, manager_entry: MockConfigEntry
+) -> None:
+    """0.1.x keyed unique_ids on the config entry id; upgrading must keep the
+    existing entity_id (and so its history) instead of creating a duplicate."""
+    registry = er.async_get(hass)
+    old = registry.async_get_or_create(
+        "switch",
+        DOMAIN,
+        f"{manager_entry.entry_id}_0_MD_recording",
+        config_entry=manager_entry,
+        suggested_object_id="garden_motion_rec",
+    )
+    assert old.entity_id == "switch.garden_motion_rec"
+
+    await _setup(hass, manager_entry)
+
+    migrated = registry.async_get("switch.garden_motion_rec")
+    assert migrated.unique_id == f"{HOST_UNIQUE_ID}_0_MD_recording"
+    assert hass.states.get("switch.garden_motion_rec").state == "on"
+    assert hass.states.get(MOTION) is None  # no duplicate created
+    assert len(er.async_entries_for_config_entry(registry, manager_entry.entry_id)) == 2
+
+
+async def test_unique_ids_survive_recreating_the_manager_entry(
+    hass: HomeAssistant, reolink_entry: MockConfigEntry, manager_entry: MockConfigEntry
+) -> None:
+    await _setup(hass, manager_entry)
+    registry = er.async_get(hass)
+    before = {e.unique_id for e in er.async_entries_for_config_entry(registry, manager_entry.entry_id)}
+
+    await hass.config_entries.async_remove(manager_entry.entry_id)
+    await hass.async_block_till_done()
+    again = MockConfigEntry(
+        domain=DOMAIN,
+        title="Front Door",
+        unique_id=reolink_entry.entry_id,
+        data=dict(manager_entry.data),
+    )
+    again.add_to_hass(hass)
+    await _setup(hass, again)
+
+    after = {e.unique_id for e in er.async_entries_for_config_entry(registry, again.entry_id)}
+    assert after == before
+    assert hass.states.get(MOTION).state == "on"
+
+
+async def test_unknown_trigger_is_named_from_its_raw_key(hass: HomeAssistant, manager_entry: MockConfigEntry, api: MagicMock) -> None:
+    api._recording_settings[0]["schedule"]["table"]["AI_OTHER"] = "0" * 168
+
+    await _setup(hass, manager_entry)
+
+    state = hass.states.get("switch.front_door_ai_other_recording")
+    assert state is not None
+    assert state.attributes["friendly_name"] == "Front Door Ai Other recording"
