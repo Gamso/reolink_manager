@@ -144,7 +144,10 @@ Names are derived from each recording's own start/end time and triggers, so the
 same recording always maps to the same path - that's what makes "already
 downloaded?" a plain existence check. Downloads land on a `.part` file and are
 renamed only once complete and size-checked, so an interrupted run never leaves
-a truncated file that looks finished.
+a truncated file that looks finished. A download the camera does not start
+within 60 s, that stalls for 60 s between two chunks, or that takes more than
+3 hours in total is abandoned (its `.part` file deleted) and retried on the
+next pass, so one stuck recording can't block the archive.
 
 ### What pruning will and won't touch
 

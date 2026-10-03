@@ -134,6 +134,17 @@ async def test_service_pass_on_a_foreign_tree_deletes_nothing(
     api.request_vod_files.assert_not_awaited()
 
 
+async def test_service_refuses_while_a_pass_is_running(
+    hass: HomeAssistant, manager_entry: MockConfigEntry, tmp_path: Path
+) -> None:
+    hass.config_entries.async_update_entry(manager_entry, options=_options(str(tmp_path / "archive")))
+    await _setup(hass, manager_entry)
+    hass.data[DOMAIN][manager_entry.entry_id]["archiver"]._running = True
+
+    with pytest.raises(HomeAssistantError, match="already in progress"):
+        await hass.services.async_call(DOMAIN, SERVICE_SYNC_RECORDINGS, {}, blocking=True)
+
+
 # --- options flow -------------------------------------------------------------
 
 

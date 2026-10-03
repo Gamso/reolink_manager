@@ -1,5 +1,6 @@
 """Tests for the recording-archive download and prune logic."""
 
+import asyncio
 from datetime import date, datetime, timedelta, timezone
 from enum import IntFlag, auto
 from pathlib import Path
@@ -7,6 +8,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from custom_components.reolink_manager import vod_archive
 from custom_components.reolink_manager.const import ARCHIVE_MARKER_FILENAME
 from custom_components.reolink_manager.vod_archive import (
     ArchiveRootError,
@@ -503,3 +505,76 @@ async def test_disk_vanishing_mid_pass_aborts_without_recreating_it(tmp_path: Pa
     assert not root.exists()
     api.download_vod.assert_not_called()
     assert any("Aborting archive pass" in r.message for r in caplog.records)
+
+
+# --- download timeouts -------------------------------------------------------
+
+
+class _StallingStream:
+    """Sends one chunk, then never sends anything again."""
+
+    async def iter_chunked(self, _size: int):
+        yield b"first"
+        await asyncio.sleep(3600)
+        yield b"never"
+
+
+async def test_stalled_download_times_out_and_frees_the_archiver(tmp_path: Path, monkeypatch) -> None:
+    """A camera that stops sending mid-file must not block every later pass."""
+    monkeypatch.setattr(vod_archive, "DOWNLOAD_CHUNK_TIMEOUT_SECONDS", 0.05)
+    _prepare_root(tmp_path)
+    now = datetime.now(timezone.utc)
+    vod = _vod_file(now - timedelta(hours=2), now - timedelta(hours=1, minutes=59))
+    api = _api([vod])
+    api._download.stream = _StallingStream()
+    archiver = VodArchiver(_hass(), api, root=tmp_path, retention_days=7, stream="main")
+
+    stats = await asyncio.wait_for(archiver._async_sync_channel(0, now - timedelta(days=1), now), 5)
+
+    assert stats.failed == 1
+    target = _target_path(tmp_path, "front_door", vod)
+    assert not target.exists()
+    assert not target.with_name(target.name + ".part").exists()
+    api._download.close.assert_called_once()
+
+    await asyncio.wait_for(archiver.async_sync(), 5)
+    assert archiver.running is False
+
+
+async def test_whole_file_timeout_bounds_a_trickling_download(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(vod_archive, "DOWNLOAD_FILE_TIMEOUT_SECONDS", 0.1)
+
+    class _Trickle:
+        async def iter_chunked(self, _size: int):
+            while True:
+                await asyncio.sleep(0.01)
+                yield b"x"
+
+    _prepare_root(tmp_path)
+    now = datetime.now(timezone.utc)
+    vod = _vod_file(now - timedelta(hours=2), now - timedelta(hours=1, minutes=59))
+    api = _api([vod])
+    api._download.stream = _Trickle()
+    archiver = VodArchiver(_hass(), api, root=tmp_path, retention_days=7, stream="main")
+
+    stats = await asyncio.wait_for(archiver._async_sync_channel(0, now - timedelta(days=1), now), 5)
+
+    assert stats.failed == 1
+
+
+async def test_download_that_never_starts_times_out(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(vod_archive, "DOWNLOAD_START_TIMEOUT_SECONDS", 0.05)
+
+    async def _hang(*_args, **_kwargs):
+        await asyncio.sleep(3600)
+
+    _prepare_root(tmp_path)
+    now = datetime.now(timezone.utc)
+    vod = _vod_file(now - timedelta(hours=2), now - timedelta(hours=1, minutes=59))
+    api = _api([vod])
+    api.download_vod = AsyncMock(side_effect=_hang)
+    archiver = VodArchiver(_hass(), api, root=tmp_path, retention_days=7, stream="main")
+
+    stats = await asyncio.wait_for(archiver._async_sync_channel(0, now - timedelta(days=1), now), 5)
+
+    assert stats.failed == 1

@@ -181,6 +181,14 @@ def _register_services(hass: HomeAssistant) -> None:
         else:
             target = entries[0][1]
 
+        # Say so rather than reporting success for a call that does nothing:
+        # overlapping passes are skipped by the archiver.
+        if target["archiver"].running:
+            raise HomeAssistantError(
+                "An archive pass is already in progress for this entry; it will "
+                "pick up new recordings itself"
+            )
+
         # A pass can run for a long time on a first catch-up, so it is started
         # in the background rather than making the service call block on it.
         target["start_sync"]()

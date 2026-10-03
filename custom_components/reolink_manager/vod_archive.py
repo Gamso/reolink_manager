@@ -17,6 +17,7 @@ never deletes anything from the camera itself.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 from dataclasses import dataclass
@@ -35,6 +36,17 @@ _LOGGER = logging.getLogger(__name__)
 DATE_DIR_PATTERN = re.compile(r"\d{4}-\d{2}-\d{2}")
 DOWNLOAD_CHUNK_SIZE = 1024 * 1024
 BYTES_PER_GIB = 1024**3
+
+# Download timeouts. Without them a camera that stops sending in the middle
+# of a file leaves the pass waiting forever, and since overlapping passes are
+# skipped, the archive silently stops until Home Assistant restarts.
+# - starting a download (the camera answering the request at all);
+DOWNLOAD_START_TIMEOUT_SECONDS = 60
+# - the gap between two chunks of one download (a stalled stream);
+DOWNLOAD_CHUNK_TIMEOUT_SECONDS = 60
+# - one whole file, however steadily it trickles in: generous enough for a
+#   large main-stream recording over the camera's slow HTTP interface.
+DOWNLOAD_FILE_TIMEOUT_SECONDS = 3 * 60 * 60
 
 # A recording whose end time is this recent may still be being written by the
 # camera. Downloading it now would store a truncated file under its final
@@ -241,6 +253,11 @@ class VodArchiver:
         self._stream = stream
         self._running = False
 
+    @property
+    def running(self) -> bool:
+        """Return True while an archive pass is in progress."""
+        return self._running
+
     async def async_sync(self) -> None:
         """Run one archive pass, unless one is already in progress.
 
@@ -423,13 +440,14 @@ class VodArchiver:
         await self._hass.async_add_executor_job(_make_parent, self._root, target)
 
         try:
-            download = await self._api.download_vod(
-                vod_file.file_name,
-                start_time=vod_file.start_time_id,
-                end_time=vod_file.end_time_id,
-                channel=channel,
-                stream=self._stream,
-            )
+            async with asyncio.timeout(DOWNLOAD_START_TIMEOUT_SECONDS):
+                download = await self._api.download_vod(
+                    vod_file.file_name,
+                    start_time=vod_file.start_time_id,
+                    end_time=vod_file.end_time_id,
+                    channel=channel,
+                    stream=self._stream,
+                )
         except Exception:  # pylint: disable=broad-exception-caught
             _LOGGER.exception("Could not start download of %s", vod_file.file_name)
             return False
@@ -458,13 +476,26 @@ class VodArchiver:
         return True
 
     async def _async_write(self, download: Any, part: Path) -> int:
-        """Stream a download to disk, returning the number of bytes written."""
+        """Stream a download to disk, returning the number of bytes written.
+
+        Raises TimeoutError when the camera stalls for longer than
+        DOWNLOAD_CHUNK_TIMEOUT_SECONDS between two chunks, or the whole file
+        takes longer than DOWNLOAD_FILE_TIMEOUT_SECONDS; the caller then
+        discards the .part file and the recording is retried next pass.
+        """
         handle = await self._hass.async_add_executor_job(_open_for_write, part)
         written = 0
+        chunks = download.stream.iter_chunked(DOWNLOAD_CHUNK_SIZE).__aiter__()
         try:
-            async for chunk in download.stream.iter_chunked(DOWNLOAD_CHUNK_SIZE):
-                await self._hass.async_add_executor_job(handle.write, chunk)
-                written += len(chunk)
+            async with asyncio.timeout(DOWNLOAD_FILE_TIMEOUT_SECONDS):
+                while True:
+                    async with asyncio.timeout(DOWNLOAD_CHUNK_TIMEOUT_SECONDS):
+                        try:
+                            chunk = await anext(chunks)
+                        except StopAsyncIteration:
+                            break
+                    await self._hass.async_add_executor_job(handle.write, chunk)
+                    written += len(chunk)
         finally:
             await self._hass.async_add_executor_job(handle.close)
         return written
