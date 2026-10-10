@@ -1,15 +1,15 @@
 {
   "domain": "reolink_manager",
   "name": "Reolink Manager",
-  "documentation": "https://github.com/Gamso/reolink_manager",
-  "issue_tracker": "https://github.com/Gamso/reolink_manager/issues",
-  "config_flow": true,
-  "dependencies": ["reolink"],
-  "integration_type": "service",
-  "iot_class": "local_polling",
-  "loggers": ["custom_components.reolink_manager"],
   "codeowners": [
     "@Gamso"
   ],
+  "config_flow": true,
+  "dependencies": ["reolink"],
+  "documentation": "https://github.com/Gamso/reolink_manager",
+  "integration_type": "service",
+  "iot_class": "local_polling",
+  "issue_tracker": "https://github.com/Gamso/reolink_manager/issues",
+  "loggers": ["custom_components.reolink_manager"],
   "version": "0.1.1"
 }

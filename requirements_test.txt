@@ -2,3 +2,7 @@
 pytest
 pytest-asyncio
 pytest-homeassistant-custom-component
+# Imported when Home Assistant loads the official reolink integration (a
+# manifest dependency) during the integration tests.
+reolink-aio
+PyTurboJPEG

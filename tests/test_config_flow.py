@@ -9,7 +9,7 @@ from custom_components.reolink_manager.config_flow import (
     ReolinkManagerConfigFlow,
     validate_archive_path,
 )
-from custom_components.reolink_manager.const import CONF_REOLINK_ENTRY_ID
+from custom_components.reolink_manager.const import ARCHIVE_MARKER_FILENAME, CONF_REOLINK_ENTRY_ID
 
 
 def _reolink_entry(entry_id: str, title: str, state=ConfigEntryState.LOADED) -> MagicMock:
@@ -88,6 +88,16 @@ async def test_creates_entry_from_selection() -> None:
     assert result["data"] == {CONF_REOLINK_ENTRY_ID: "r1"}
 
 
+async def test_entry_unloaded_since_form_was_shown_is_an_error_not_a_crash() -> None:
+    """r2 was offered, then unloaded before the user submitted it."""
+    flow = _make_flow([_reolink_entry("r1", "Front door"), _reolink_entry("r2", "Garage", ConfigEntryState.NOT_LOADED)])
+
+    result = await flow.async_step_user({CONF_REOLINK_ENTRY_ID: "r2"})
+
+    assert result["type"] == "form"
+    assert result["errors"] == {"base": "entry_not_loaded"}
+
+
 # --- archive path validation ------------------------------------------------
 
 
@@ -121,3 +131,15 @@ def test_archive_path_rejects_missing_parent(tmp_path: Path) -> None:
         validate_archive_path(str(tmp_path / "unmounted" / "reolink"))
         == "path_parent_missing"
     )
+
+
+def test_archive_path_rejects_a_non_empty_foreign_folder(tmp_path: Path) -> None:
+    """Pruning must never reach files something else put in the folder."""
+    (tmp_path / "front").mkdir()
+    assert validate_archive_path(str(tmp_path)) == "path_not_empty"
+
+
+def test_archive_path_accepts_an_existing_archive(tmp_path: Path) -> None:
+    (tmp_path / ARCHIVE_MARKER_FILENAME).write_text("", encoding="utf-8")
+    (tmp_path / "front").mkdir()
+    assert validate_archive_path(str(tmp_path)) is None

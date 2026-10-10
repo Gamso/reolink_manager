@@ -1,0 +1,33 @@
+name: Validate
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  schedule:
+    - cron: "0 4 * * 1"
+
+jobs:
+  hassfest:
+    runs-on: ubuntu-latest
+    name: hassfest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Run hassfest
+        uses: home-assistant/actions/hassfest@master
+
+  hacs:
+    runs-on: ubuntu-latest
+    name: HACS
+    steps:
+      - name: Run HACS validation
+        uses: hacs/action@main
+        with:
+          category: integration
+          # The brand icons ship with the integration itself
+          # (custom_components/reolink_manager/brand/, served by Home
+          # Assistant's brands integration), not via home-assistant/brands.
+          ignore: brands

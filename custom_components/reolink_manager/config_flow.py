@@ -26,6 +26,7 @@ from homeassistant.core import callback
 from homeassistant.helpers import selector
 
 from .const import (
+    ARCHIVE_MARKER_FILENAME,
     ARCHIVE_STREAMS,
     CONF_ARCHIVE_INTERVAL_HOURS,
     CONF_ARCHIVE_PATH,
@@ -66,6 +67,12 @@ def validate_archive_path(raw_path: str) -> str | None:
             return "path_not_directory"
         if not os.access(path, os.W_OK):
             return "path_not_writable"
+        # Same rule the archiver enforces before writing its marker: a
+        # folder that already holds files is only acceptable if it is
+        # already a Reolink Manager archive, so pruning can never reach
+        # files something else put there.
+        if not (path / ARCHIVE_MARKER_FILENAME).exists() and any(path.iterdir()):
+            return "path_not_empty"
         return None
 
     # The archive root itself is created on first use, but its parent has to
@@ -110,14 +117,20 @@ class ReolinkManagerConfigFlow(ConfigFlow, domain=DOMAIN):
         if not reolink_entries:
             return self.async_abort(reason="no_reolink_entries")
 
+        errors: dict[str, str] = {}
         if user_input is not None:
             reolink_entry_id = user_input[CONF_REOLINK_ENTRY_ID]
-            await self.async_set_unique_id(reolink_entry_id)
-            self._abort_if_unique_id_configured()
-            return self.async_create_entry(
-                title=reolink_entries[reolink_entry_id],
-                data={CONF_REOLINK_ENTRY_ID: reolink_entry_id},
-            )
+            # The picked entry may have been unloaded (or picked up by another
+            # flow) between showing the form and submitting it.
+            if reolink_entry_id not in reolink_entries:
+                errors["base"] = "entry_not_loaded"
+            else:
+                await self.async_set_unique_id(reolink_entry_id)
+                self._abort_if_unique_id_configured()
+                return self.async_create_entry(
+                    title=reolink_entries[reolink_entry_id],
+                    data={CONF_REOLINK_ENTRY_ID: reolink_entry_id},
+                )
 
         data_schema = vol.Schema(
             {
@@ -132,7 +145,7 @@ class ReolinkManagerConfigFlow(ConfigFlow, domain=DOMAIN):
                 )
             }
         )
-        return self.async_show_form(step_id="user", data_schema=data_schema)
+        return self.async_show_form(step_id="user", data_schema=data_schema, errors=errors)
 
 
 class ReolinkManagerOptionsFlow(OptionsFlow):

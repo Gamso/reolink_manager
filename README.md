@@ -23,7 +23,8 @@ are scheduled to record. That per-trigger schedule is configured on the
 camera/NVR itself (or in the Reolink app), not from Home Assistant.
 
 Reolink's HTTP API *does* support reading and writing that schedule
-(`GetRecV20`/`SetRecV20`, see `docs/reolink-camera-http-api-user-guide.pdf`),
+(`GetRecV20`/`SetRecV20`, documented in Reolink's *Camera HTTP API User
+Guide*, available from Reolink support),
 and the `reolink_aio` library HA already depends on caches the raw schedule
 table - it just never parses or exposes it. Reolink Manager reuses that cache
 and that connection directly, so you get toggles like *"Animal recording"* or
@@ -47,12 +48,25 @@ manage" - picked once in its config flow. At setup it:
    `AI_VEHICLE`, `AI_ANIMAL`, `TIMING`, ...).
 4. Turning a switch on/off overwrites that trigger's entire weekly bitstring
    with all-1s or all-0s and sends it back via `SetRecV20`/`SetRec` - a
-   blanket on/off, not a partial schedule edit.
+   blanket on/off, not a partial schedule edit. Only the schedule table is
+   sent: the global recording switch (`switch.<camera>_record`) is left as it
+   is, so turning one trigger on or off never re-enables recording overall.
 
 Switches are attached to the *same* Home Assistant device as the camera's own
 Reolink entities (matching the official integration's device-identifier
 scheme), so they show up alongside `switch.<camera>_record` rather than under
 a separate device.
+
+Their state follows the official integration's own periodic poll: each switch
+asks it to include `GetRecV20` for its channel (the official integration
+otherwise only polls it while its own `switch.<camera>_record` is enabled), so
+a schedule changed from the Reolink app shows up at the next poll, without any
+request of Reolink Manager's own.
+
+Reolink Manager also follows the Reolink entry's lifecycle. While that entry is
+reloading (after changing its options, a reauthentication...) or unloaded, the
+switches are unavailable and any archive pass in progress is stopped; once it is
+loaded again, Reolink Manager reloads itself on top of the new connection.
 
 ## Recording archive
 
@@ -60,13 +74,13 @@ Playing recordings straight from the camera is slow: they stream over the
 camera's own HTTP interface, which isn't built for seeking through days of
 footage. The archive keeps a local mirror instead.
 
-Enable it in **Settings > Devices & Services > Reolink Manager > Configure**:
-
-There is no separate on/off switch: the archive runs when a folder is set below, and is off when it's left empty.
+Enable it in **Settings > Devices & Services > Reolink Manager > Configure** by
+setting an archive folder. There is no separate on/off switch: the archive runs
+when a folder is set, and is off when it's left empty. The options are:
 
 | Option | Meaning |
 | -- | -- |
-| Archive folder | Absolute path, e.g. `/media/reolink` or an external disk's mount point. Leave empty to disable the archive. Its **parent** must already exist, so an unmounted disk fails loudly instead of silently filling the mount point. |
+| Archive folder | Absolute path, e.g. `/media/reolink` or a folder on an external disk such as `/media/usb/reolink`. Leave empty to disable the archive. Its **parent** must already exist, and the folder itself must be new, empty, or an existing Reolink Manager archive (see [What pruning will and won't touch](#what-pruning-will-and-wont-touch)). |
 | Keep downloaded recordings for | Retention in days (default 7). |
 | Check for new recordings every | Interval in hours (default 6). |
 | Stream to download | `main` (full resolution, large) or `sub` (low resolution, much smaller). |
@@ -79,9 +93,10 @@ saving the options reloads the entry, which restarts that 5-minute timer** - so
 repeatedly tweaking settings can keep postponing the first catch-up. Call the
 service if you don't want to wait.
 
-Every pass re-checks the whole retention window, not just what's new since last
-time: it lists what the camera holds and downloads whatever isn't on disk yet.
-So a freshly configured archive catches up on the last N days on its own.
+Every periodic (or service-started) pass re-checks the whole retention window,
+not just what's new since last time: it lists what the camera holds and
+downloads whatever isn't on disk yet, then prunes. So a freshly configured
+archive catches up on the last N days on its own.
 
 ### Reading the logs
 
@@ -108,7 +123,11 @@ The periodic interval alone means a new recording can sit unarchived for up to
 that whole interval. To pick it up sooner, pick the detection sensors under
 **"Sync immediately when these clear"** - e.g.
 `binary_sensor.e1_zoom_bureau_animal_domestique`. This is additional to the
-periodic schedule, not a replacement for it.
+periodic schedule, not a replacement for it. Such a detection-triggered sync
+only lists *today's* recordings (and yesterday's too during the first hour
+after midnight) and doesn't prune: the recording that just finished is
+recent, and re-listing the whole retention window on every detection would
+cost one camera request per day of retention and per channel each time.
 
 The trigger fires on the sensor's 1 -> 0 transition (detected -> clear), not on
 0 -> 1, because the recording isn't finished - and so isn't listed by the
@@ -144,16 +163,35 @@ Names are derived from each recording's own start/end time and triggers, so the
 same recording always maps to the same path - that's what makes "already
 downloaded?" a plain existence check. Downloads land on a `.part` file and are
 renamed only once complete and size-checked, so an interrupted run never leaves
-a truncated file that looks finished.
+a truncated file that looks finished. A download the camera does not start
+within 60 s, that stalls for 60 s between two chunks, or that takes more than
+3 hours in total is abandoned (its `.part` file deleted) and retried on the
+next pass, so one stuck recording can't block the archive.
 
 ### What pruning will and won't touch
 
 Retention deletes **archived copies only**. Nothing is ever deleted from the
 camera. Because the archive folder is a path you supply - quite possibly an
-external disk holding other data - pruning is deliberately narrow. It:
+external disk holding other data - the archive is deliberately careful about
+where it writes and what it deletes.
 
-* refuses to run at all unless the `.reolink_manager_archive` marker file is
-  present at the root, so it can only act on a tree this integration created;
+The `.reolink_manager_archive` marker file is only ever written into a folder
+that the archive has just created or that is **empty**. A folder that already
+holds files but no marker is refused - by the options form, and again by every
+pass, which then logs an ERROR and does nothing (no download, no pruning). So
+point the archive at a dedicated sub-folder (`/media/usb/reolink`), not at the
+root of a disk: a freshly formatted ext4 disk already holds `lost+found`.
+
+Only the archive folder itself is ever created, never its parents. If the disk
+it lives on is unmounted, its mount point is still there but the folder is
+not: every pass then logs an ERROR and stops, instead of rebuilding the tree
+(and downloading gigabytes) on the system disk underneath the mount point. A
+disk that disappears in the middle of a pass aborts that pass the same way.
+
+Pruning itself:
+
+* refuses to run at all unless the marker file is present at the root, so it
+  can only act on a tree this integration created;
 * only descends into `<camera>/<YYYY-MM-DD>/` directories whose name really
   parses as a date;
 * only deletes `.mp4` files and interrupted `.part` downloads, leaving every
@@ -213,5 +251,12 @@ every channel it exposes.
 ## Development
 
 See [`.devcontainer/README.md`](.devcontainer/README.md) for the VS Code
-devcontainer setup. There is no simulated-camera fixture: manual end-to-end
-testing needs a real Reolink camera or NVR reachable from the container.
+devcontainer setup. The automated tests (`pytest`, see `requirements_test.txt`)
+run the integration inside a test Home Assistant against a faked official
+Reolink entry; CI also runs flake8, hassfest and the HACS validation. There is
+no simulated camera, so manual end-to-end testing needs a real Reolink camera
+or NVR reachable from the container.
+
+## License
+
+[MIT](LICENSE)
