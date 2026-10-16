@@ -17,7 +17,9 @@ never deletes anything from the camera itself.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
+import os
 import re
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
@@ -36,11 +38,29 @@ DATE_DIR_PATTERN = re.compile(r"\d{4}-\d{2}-\d{2}")
 DOWNLOAD_CHUNK_SIZE = 1024 * 1024
 BYTES_PER_GIB = 1024**3
 
+# Download timeouts. Without them a camera that stops sending in the middle
+# of a file leaves the pass waiting forever, and since overlapping passes are
+# skipped, the archive silently stops until Home Assistant restarts.
+# - starting a download (the camera answering the request at all);
+DOWNLOAD_START_TIMEOUT_SECONDS = 60
+# - the gap between two chunks of one download (a stalled stream);
+DOWNLOAD_CHUNK_TIMEOUT_SECONDS = 60
+# - one whole file, however steadily it trickles in: generous enough for a
+#   large main-stream recording over the camera's slow HTTP interface.
+DOWNLOAD_FILE_TIMEOUT_SECONDS = 3 * 60 * 60
+
 # A recording whose end time is this recent may still be being written by the
 # camera. Downloading it now would store a truncated file under its final
 # name, and the existence check would never re-fetch it; leave it for the next
 # pass instead.
 STILL_RECORDING_MARGIN = timedelta(minutes=2)
+
+# A detection-triggered pass only lists today's recordings - the one that just
+# finished is there - instead of the whole retention window, which would cost
+# one Search request per day of retention and per channel after every
+# detection. Within this long after midnight it lists yesterday too, so a
+# recording that ended just before midnight is not left to the next full pass.
+RECENT_SYNC_MIDNIGHT_MARGIN = timedelta(hours=1)
 
 # Downloads land on `<name>.mp4.part` and are renamed only once complete, so an
 # interrupted run never leaves a short file that looks like a finished one.
@@ -54,12 +74,42 @@ MARKER_CONTENT = (
 )
 
 
+class ArchiveRootError(OSError):
+    """The archive root is unusable, and using it anyway could cause damage."""
+
+
 def _prepare_root(root: Path) -> None:
-    """Create the archive root and its marker file. Blocking; run in an executor."""
-    root.mkdir(parents=True, exist_ok=True)
+    """Create the archive root and its marker file. Blocking; run in an executor.
+
+    Two safety rules, both raising `ArchiveRootError` instead of going ahead:
+
+    * the root's parent must already exist, and only the root itself is ever
+      created (never its ancestors): when an external disk is unmounted, its
+      mount point is still there but the archive folder on it is not, and
+      recreating it would silently fill the system disk (an SD card on a Pi
+      or HA Green) with a tree that pruning would then refuse to touch;
+    * the marker that authorises pruning is only written into a folder this
+      call just created, or one that is empty. A pre-existing folder holding
+      someone else's `<name>/<YYYY-MM-DD>/*.mp4` files (another exporter, a
+      NAS share) would otherwise be marked as ours and pruned.
+    """
+    if not root.parent.is_dir():
+        raise ArchiveRootError(
+            f"its parent folder {root.parent} does not exist (is the disk mounted?)"
+        )
+    root.mkdir(exist_ok=True)
+    if not root.is_dir():
+        raise ArchiveRootError(f"{root} is not a folder")
+
     marker = root / ARCHIVE_MARKER_FILENAME
-    if not marker.exists():
-        marker.write_text(MARKER_CONTENT, encoding="utf-8")
+    if marker.exists():
+        return
+    if any(root.iterdir()):
+        raise ArchiveRootError(
+            f"{root} already holds files but no {ARCHIVE_MARKER_FILENAME} marker, so "
+            "it is not a Reolink Manager archive; pick an empty or new folder"
+        )
+    marker.write_text(MARKER_CONTENT, encoding="utf-8")
 
 
 def _prune_archive(root: Path, cutoff: date) -> int:
@@ -69,7 +119,9 @@ def _prune_archive(root: Path, cutoff: date) -> int:
     may well be an external disk holding other data:
 
     * refuses to do anything unless the marker file written by `_prepare_root`
-      is present, so it can only ever run against a tree this integration made;
+      is present - and that marker is only ever written into a folder that
+      was new or empty - so it can only run against a tree this integration
+      made;
     * only descends into `<camera>/<YYYY-MM-DD>/` directories, and only ones
       whose name really parses as a date;
     * only unlinks `.mp4` files and interrupted `.part` downloads, leaving any
@@ -209,33 +261,44 @@ class VodArchiver:
         self._stream = stream
         self._running = False
 
-    async def async_sync(self) -> None:
+    @property
+    def running(self) -> bool:
+        """Return True while an archive pass is in progress."""
+        return self._running
+
+    async def async_sync(self, *, recent_only: bool = False) -> None:
         """Run one archive pass, unless one is already in progress.
 
         Overlapping passes are skipped rather than queued: they would fight
         over the camera's single connection and re-download the same files.
+
+        A full pass (periodic, service) re-checks the whole retention window
+        and prunes; a `recent_only` pass (detection trigger) only lists today,
+        plus yesterday shortly after midnight, and does not prune.
         """
         if self._running:
             _LOGGER.debug("Archive pass already in progress for %s; skipping", self._root)
             return
         self._running = True
         try:
-            await self._async_sync()
+            await self._async_sync(recent_only)
         finally:
             self._running = False
 
-    async def _async_sync(self) -> None:
+    async def _async_sync(self, recent_only: bool) -> None:
         try:
             await self._hass.async_add_executor_job(_prepare_root, self._root)
         except OSError as err:
-            # Most commonly a permissions or read-only mount problem on
-            # whatever the archive folder points at (an external disk, say) -
-            # worth a clear one-line error instead of a bare stack trace,
-            # since this fires on every scheduled/triggered pass until fixed.
+            # An unmounted disk, a foreign non-empty folder, or a permissions
+            # / read-only mount problem - worth a clear one-line error instead
+            # of a bare stack trace, since this fires on every
+            # scheduled/triggered pass until fixed. Nothing is created,
+            # downloaded or pruned.
             _LOGGER.error(
-                "Cannot use %s as the recording archive: %s. Check that Home "
-                "Assistant has write access to this path (and that the disk, "
-                "if external, is actually mounted read-write).",
+                "Skipping archive pass: cannot use %s as the recording archive: %s. "
+                "Check that the folder is new or empty (or already a Reolink Manager "
+                "archive), that its disk is mounted read-write, and that Home "
+                "Assistant can write to it.",
                 self._root,
                 err,
             )
@@ -243,6 +306,8 @@ class VodArchiver:
 
         now = dt_util.now()
         window_start = now - timedelta(days=self._retention_days)
+        if recent_only:
+            window_start = max(window_start, _recent_window_start(now))
         started = monotonic()
         _LOGGER.debug(
             "Archive pass starting: '%s' stream, recordings since %s, into %s",
@@ -252,11 +317,19 @@ class VodArchiver:
         )
 
         stats = _SyncStats()
-        for channel in self._api.stream_channels:
-            stats.add(await self._async_sync_channel(channel, window_start, now))
+        try:
+            for channel in self._api.stream_channels:
+                stats.add(await self._async_sync_channel(channel, window_start, now))
+        except ArchiveRootError as err:
+            # The archive vanished mid-pass (disk unmounted, marker deleted):
+            # stop instead of recreating it somewhere it does not belong.
+            _LOGGER.error("Aborting archive pass for %s: %s", self._root, err)
+            return
 
         cutoff = (now - timedelta(days=self._retention_days)).date()
-        removed = await self._hass.async_add_executor_job(_prune_archive, self._root, cutoff)
+        removed = 0
+        if not recent_only:
+            removed = await self._hass.async_add_executor_job(_prune_archive, self._root, cutoff)
 
         # An uneventful pass (nothing new, nothing pruned) is the normal case
         # every few hours, so it stays at debug; anything that actually changed
@@ -327,19 +400,21 @@ class VodArchiver:
         # returned by both days' searches (the camera's Search matches any
         # recording overlapping the window, not only ones starting inside it)
         # and would otherwise be downloaded twice.
-        pending: dict[Path, Any] = {}
-        seen: set[Path] = set()
+        candidates: dict[Path, Any] = {}
         for vod_file in vod_files:
             if _is_still_recording(vod_file.end_time, now):
                 continue
-            target = _target_path(self._root, camera_dir, vod_file)
-            if target in seen:
-                continue
-            seen.add(target)
-            if await self._hass.async_add_executor_job(target.exists):
+            candidates.setdefault(_target_path(self._root, camera_dir, vod_file), vod_file)
+
+        # One executor job (one listdir per day folder) for the whole channel,
+        # rather than one per listed recording.
+        existing = await self._hass.async_add_executor_job(_existing_files, list(candidates))
+        pending: dict[Path, Any] = {}
+        for target, vod_file in candidates.items():
+            if target in existing:
                 stats.already_archived += 1
-                continue
-            pending[target] = vod_file
+            else:
+                pending[target] = vod_file
 
         _LOGGER.debug(
             "%s (channel %s): %d recording(s) listed, %d already archived, %d to download",
@@ -380,16 +455,17 @@ class VodArchiver:
         the rest of the pass, and it will be retried on the next one.
         """
         part = target.with_name(target.name + PART_SUFFIX)
-        await self._hass.async_add_executor_job(_make_parent, target)
+        await self._hass.async_add_executor_job(_make_parent, self._root, target)
 
         try:
-            download = await self._api.download_vod(
-                vod_file.file_name,
-                start_time=vod_file.start_time_id,
-                end_time=vod_file.end_time_id,
-                channel=channel,
-                stream=self._stream,
-            )
+            async with asyncio.timeout(DOWNLOAD_START_TIMEOUT_SECONDS):
+                download = await self._api.download_vod(
+                    vod_file.file_name,
+                    start_time=vod_file.start_time_id,
+                    end_time=vod_file.end_time_id,
+                    channel=channel,
+                    stream=self._stream,
+                )
         except Exception:  # pylint: disable=broad-exception-caught
             _LOGGER.exception("Could not start download of %s", vod_file.file_name)
             return False
@@ -418,20 +494,63 @@ class VodArchiver:
         return True
 
     async def _async_write(self, download: Any, part: Path) -> int:
-        """Stream a download to disk, returning the number of bytes written."""
+        """Stream a download to disk, returning the number of bytes written.
+
+        Raises TimeoutError when the camera stalls for longer than
+        DOWNLOAD_CHUNK_TIMEOUT_SECONDS between two chunks, or the whole file
+        takes longer than DOWNLOAD_FILE_TIMEOUT_SECONDS; the caller then
+        discards the .part file and the recording is retried next pass.
+        """
         handle = await self._hass.async_add_executor_job(_open_for_write, part)
         written = 0
+        chunks = download.stream.iter_chunked(DOWNLOAD_CHUNK_SIZE).__aiter__()
         try:
-            async for chunk in download.stream.iter_chunked(DOWNLOAD_CHUNK_SIZE):
-                await self._hass.async_add_executor_job(handle.write, chunk)
-                written += len(chunk)
+            async with asyncio.timeout(DOWNLOAD_FILE_TIMEOUT_SECONDS):
+                while True:
+                    async with asyncio.timeout(DOWNLOAD_CHUNK_TIMEOUT_SECONDS):
+                        try:
+                            chunk = await anext(chunks)
+                        except StopAsyncIteration:
+                            break
+                    await self._hass.async_add_executor_job(handle.write, chunk)
+                    written += len(chunk)
         finally:
             await self._hass.async_add_executor_job(handle.close)
         return written
 
 
-def _make_parent(target: Path) -> None:
-    """Blocking; run in an executor."""
+def _recent_window_start(now: datetime) -> datetime:
+    """Return where a detection-triggered pass starts listing."""
+    start = dt_util.start_of_local_day(now)
+    if now - start < RECENT_SYNC_MIDNIGHT_MARGIN:
+        start -= timedelta(days=1)
+    return start
+
+
+def _existing_files(targets: list[Path]) -> set[Path]:
+    """Return which of *targets* already exist. Blocking; run in an executor.
+
+    Lists each distinct parent folder once instead of stat-ing every file.
+    """
+    existing: set[Path] = set()
+    for parent in {target.parent for target in targets}:
+        try:
+            names = set(os.listdir(parent))
+        except FileNotFoundError:
+            continue
+        existing.update(target for target in targets if target.parent == parent and target.name in names)
+    return existing
+
+
+def _make_parent(root: Path, target: Path) -> None:
+    """Create *target*'s `<camera>/<date>` folders under *root*. Blocking; run in an executor.
+
+    Only below a root that still carries the archive marker: if the disk was
+    unmounted since the pass started, `parents=True` would otherwise rebuild
+    the whole tree on the mount point.
+    """
+    if not (root / ARCHIVE_MARKER_FILENAME).exists():
+        raise ArchiveRootError(f"{root} is no longer available (marker file missing)")
     target.parent.mkdir(parents=True, exist_ok=True)
 
 

@@ -9,6 +9,9 @@
         }
       }
     },
+    "error": {
+      "entry_not_loaded": "The selected Reolink integration entry is no longer loaded. Pick another one, or wait for it to finish loading."
+    },
     "abort": {
       "no_reolink_entries": "No loaded Reolink integration entry was found (or all of them already have a Reolink Manager instance). Set up the official Reolink integration first.",
       "already_configured": "This Reolink integration entry is already managed by Reolink Manager."
@@ -28,7 +31,7 @@
           "trigger_settle_seconds": "Wait this long after they clear (seconds)"
         },
         "data_description": {
-          "archive_path": "Absolute path, for example /media/reolink or an external disk's mount point. Its parent folder must already exist. Leave empty to disable the archive.",
+          "archive_path": "Absolute path, for example /media/reolink or an external disk's mount point. Its parent folder must already exist, and the folder itself must be new, empty, or an existing Reolink Manager archive. Leave empty to disable the archive.",
           "archive_retention_days": "Archived copies older than this are deleted from the archive folder. Nothing is deleted from the camera.",
           "archive_stream": "The main stream is full resolution and much larger; the sub stream is far smaller but low resolution.",
           "trigger_entities": "Typically this camera's own person/animal/vehicle binary sensors from the Reolink integration. When one goes from detected back to clear, a sync starts after the wait below - on top of the periodic schedule, not instead of it. Leave empty to rely on the periodic schedule only.",
@@ -40,7 +43,36 @@
       "path_not_absolute": "The archive folder must be an absolute path.",
       "path_not_directory": "The archive path exists but is not a folder.",
       "path_not_writable": "Home Assistant cannot write to this location.",
-      "path_parent_missing": "The parent folder does not exist. If this is an external disk, check that it is mounted."
+      "path_parent_missing": "The parent folder does not exist. If this is an external disk, check that it is mounted.",
+      "path_not_empty": "The archive folder already contains files and is not a Reolink Manager archive. Pick an empty or new folder: old recordings are pruned from the archive folder, so it must not hold anything else."
+    }
+  },
+  "entity": {
+    "switch": {
+      "motion_recording": {
+        "name": "Motion recording"
+      },
+      "continuous_recording": {
+        "name": "Continuous recording"
+      },
+      "person_recording": {
+        "name": "Person recording"
+      },
+      "vehicle_recording": {
+        "name": "Vehicle recording"
+      },
+      "animal_recording": {
+        "name": "Animal recording"
+      },
+      "pet_recording": {
+        "name": "Pet recording"
+      },
+      "face_recording": {
+        "name": "Face recording"
+      },
+      "trigger_recording": {
+        "name": "{trigger} recording"
+      }
     }
   },
   "selector": {

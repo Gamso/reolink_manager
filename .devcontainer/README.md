@@ -2,7 +2,7 @@
 
 The easiest way to get started with custom integration development is to use Visual Studio Code with devcontainers. This approach will create a preconfigured development environment with all the tools you need.
 
-In the container you will have a dedicated Home Assistant core instance running with your custom component code. You can configure this instance by updating the `./devcontainer/configuration.yaml` file.
+In the container you will have a dedicated Home Assistant core instance running with your custom component code. You can configure this instance by updating the `.devcontainer/configuration.yaml` file.
 
 **Prerequisites**
 
@@ -26,15 +26,18 @@ When you open this repository with Visual Studio code you are asked to "Reopen i
 
 _If you don't see this notification, open the command palette and select `Remote-Containers: Reopen Folder in Container`._
 
-### Tasks
+### Commands
 
-The devcontainer comes with some useful tasks to help you with development, you can start these tasks by opening the command palette and select `Tasks: Run Task` then select the task you want to run.
+The container runs `./container dev-setup` once after it is created (installs
+`requirements_dev.txt` and `requirements_test.txt`). From a terminal in the
+container:
 
-Task | Description
+Command | Description
 -- | --
-Run Home Assistant on port 8123 | Launch Home Assistant with your custom component code and the configuration defined in `.devcontainer/configuration.yaml`.
-Restart Home Assistant on port 8123 | Kill and relaunch the running instance.
-Start coverage | Run the pytest suite under coverage and produce an HTML report.
+`./container start` | Launch Home Assistant on port 8123 with your custom component code and the configuration defined in `.devcontainer/configuration.yaml` (via `scripts/starts_ha.sh`).
+`./container restart` | Kill and relaunch the running instance.
+`./container coverage` | Run the pytest suite under coverage and produce an HTML report in `htmlcov/`.
+`pytest` | Run the test suite.
 
 ### Manual end-to-end testing
 
@@ -48,6 +51,6 @@ Reolink Manager has no simulated-camera fixture (unlike a template climate entit
 
 With the development container, you can test your custom component in Home Assistant with step by step debugging.
 
-The `.devcontainer/configuration.yaml` file already has `debugpy:` enabled. Launch the task `Run Home Assistant on port 8123`, and launch the debugger with the existing debugging configuration `Home Assistant (debug)`.
+The `.devcontainer/configuration.yaml` file already has `debugpy:` enabled on port 5678. Start Home Assistant with `./container start`, then attach VS Code's Python debugger to it: add a "Python Debugger: Remote Attach" configuration to your own `.vscode/launch.json` pointing at `localhost`, port `5678` (the repository does not ship a launch configuration).
 
 For more information, look at [the Remote Python Debugger integration documentation](https://www.home-assistant.io/integrations/debugpy/).
