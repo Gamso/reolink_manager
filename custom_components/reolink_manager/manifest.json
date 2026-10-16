@@ -5,11 +5,15 @@
     "@Gamso"
   ],
   "config_flow": true,
-  "dependencies": ["reolink"],
+  "dependencies": [
+    "reolink"
+  ],
   "documentation": "https://github.com/Gamso/reolink_manager",
   "integration_type": "service",
   "iot_class": "local_polling",
   "issue_tracker": "https://github.com/Gamso/reolink_manager/issues",
-  "loggers": ["custom_components.reolink_manager"],
-  "version": "0.1.1"
+  "loggers": [
+    "custom_components.reolink_manager"
+  ],
+  "version": "0.2.0"
 }
